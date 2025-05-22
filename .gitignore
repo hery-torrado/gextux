@@ -3,7 +3,7 @@
 *.obj
 
 # Executable
-gextux_customer_management
+# gextux_customer_management
 
 # SQLite Database file (you generally don't want to commit the live DB)
 *.db
