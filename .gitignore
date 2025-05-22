@@ -1,0 +1,19 @@
+# Compiled object files
+*.o
+*.obj
+
+# Executable
+gextux_customer_management
+
+# SQLite Database file (you generally don't want to commit the live DB)
+*.db
+*.sqlite
+*.sqlite3
+
+# Editor/IDE specific files (examples)
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# Any other temporary or local configuration files
