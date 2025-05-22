@@ -1,4 +1,4 @@
-GexTuX: A Command-Line Customer Database with an Authentic 1980s Interface
+# GexTuX: A Command-Line Customer Database with an Authentic 1980s Interface
 
 **GexTuX Customer Editor** is a terminal-based (TUI) application for managing a customer's database. It is designed with a retro-futuristic aesthetic and uses SQLite for data storage. This editor is a component of a future larger "GexTuX CRM" system.
 
