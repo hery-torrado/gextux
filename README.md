@@ -1,6 +1,6 @@
 # GexTuX Customer Editor
 
-**GexTuX Customer Editor** is a terminal-based (TUI) application for managing customer data. It is designed with a retro-futuristic aesthetic and uses SQLite for data storage. This editor is a component of a future larger "GexTuX CRM" system.
+**GexTuX Customer Editor** is a terminal-based (TUI) application for managing a customer's database. It is designed with a retro-futuristic aesthetic and uses SQLite for data storage. This editor is a component of a future larger "GexTuX CRM" system.
 
 **Version:** 1.0 (May 2025)
 
