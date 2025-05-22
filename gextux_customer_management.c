@@ -1,237 +1,238 @@
-#define _GNU_SOURCE              // Try this for wcwidth and other POSIX/XSI extensions
-#define _POSIX_C_SOURCE 200809L
-#define _XOPEN_SOURCE_EXTENDED 1 // For cchar_t, setcchar, wborder_set
+#define _GNU_SOURCE              // Enables GNU-specific extensions, often for POSIX/XSI features like wcwidth.
+#define _POSIX_C_SOURCE 200809L  // Defines the version of the POSIX standard to adhere to for compatibility.
+#define _XOPEN_SOURCE_EXTENDED 1 // Enables X/Open System Interfaces (XSI) extensions, for types like cchar_t.
 
 // --- Instructions for Non-ASCII (UTF-8) Character Support ---
-// ... (rest of the instructions are the same)
+// ... (rest of the instructions are the same) // Placeholder for original instructions.
 
-#include <wchar.h>    // For wcwidth, mbtowc, setcchar, wchar_t, cchar_t
-#include <ncurses.h>  // ncurses.h should ideally come after wchar.h if it depends on its types
-#include <stdlib.h>
-#include <string.h>
-#include <strings.h>  // For strcasecmp
-#include <sqlite3.h>
-#include <ctype.h>    // For isprint, toupper, isspace
-#include <time.h>     // For date display
-#include <stdarg.h>   // For va_list, etc.
-#include <stdio.h>    // For popen, pclose, fprintf, FILE*, snprintf
-#include <sys/wait.h> // For WIFEXITED, WEXITSTATUS with pclose
-#include <signal.h>   // For SIGWINCH handling
-#include <unistd.h>   // For execlp, getopt
-#include <stdbool.h>  // For bool type
-#include <locale.h>   // Required for setlocale (for non-ASCII character support)
+#include <wchar.h>    // For wide character functions (wcwidth, mbtowc, setcchar) and types (wchar_t, cchar_t).
+#include <ncurses.h>  // For the ncurses terminal handling library; should ideally be after wchar.h if dependent.
+#include <stdlib.h>   // For standard library functions like memory allocation (malloc, free), string conversion (atoi).
+#include <string.h>   // For string manipulation functions (strcpy, strlen, strcmp).
+#include <strings.h>  // For case-insensitive string comparison (strcasecmp).
+#include <sqlite3.h>  // For SQLite database interface functions and types.
+#include <ctype.h>    // For character classification functions (isprint, toupper, isspace).
+#include <time.h>     // For time and date functions, used for displaying current time.
+#include <stdarg.h>   // For variable argument list handling (va_list, va_start, va_end).
+#include <stdio.h>    // For standard input/output functions (popen, pclose, fprintf, snprintf).
+#include <sys/wait.h> // For process waiting functions (WIFEXITED, WEXITSTATUS), used with pclose.
+#include <signal.h>   // For signal handling (SIGWINCH for resize, SIGINT/SIGTERM for exit).
+#include <unistd.h>   // For POSIX operating system API (execlp for executing programs, getopt for command-line options).
+#include <stdbool.h>  // For the boolean type (bool) and its values (true, false).
+#include <locale.h>   // Required for setlocale, to enable non-ASCII (UTF-8) character support.
 
 // --- Retro-Futuristic Look Character Definitions ---
-// These require UTF-8 terminal support and ncursesw.
+// These definitions require a UTF-8 capable terminal and the ncursesw library (wide character support).
 
-// Wide character constants for border elements and single characters
-#define WC_RF_VLINE        L'║'
-#define WC_RF_HLINE        L'═'
-#define WC_RF_ULCORNER     L'╔'
-#define WC_RF_URCORNER     L'╗'
-#define WC_RF_LLCORNER     L'╚'
-#define WC_RF_LRCORNER     L'╝'
+// Wide character constants for border elements and single characters using UTF-8 literals.
+#define WC_RF_VLINE        L'║' // Defines a wide character for a double vertical line border segment.
+#define WC_RF_HLINE        L'═' // Defines a wide character for a double horizontal line border segment.
+#define WC_RF_ULCORNER     L'╔' // Defines a wide character for a double upper-left corner border segment.
+#define WC_RF_URCORNER     L'╗' // Defines a wide character for a double upper-right corner border segment.
+#define WC_RF_LLCORNER     L'╚' // Defines a wide character for a double lower-left corner border segment.
+#define WC_RF_LRCORNER     L'╝' // Defines a wide character for a double lower-right corner border segment.
 
-#define WC_RF_TITLE_SEP_CHAR L'━' // Heavy line for under titles
-#define WC_RF_PANE_VSEP      L'┃' // Heavy vertical line for pane separation
+#define WC_RF_TITLE_SEP_CHAR L'━' // Defines a wide character for a heavy horizontal line, used as a title separator.
+#define WC_RF_PANE_VSEP      L'┃' // Defines a wide character for a heavy vertical line, used for separating panes.
 
-// String constants (UTF-8 encoded) - these are fine as regular strings
-#define RF_MENU_SELECTOR_STR "➔ "
-#define RF_MENU_SELECTOR_VISUAL_LEN 2
+// String constants (UTF-8 encoded) - these are standard C strings, but represent UTF-8 characters.
+#define RF_MENU_SELECTOR_STR "➔ "    // Defines the string for the menu item selector (arrow and space).
+#define RF_MENU_SELECTOR_VISUAL_LEN 2 // Defines the visual character length of the menu selector string.
 
-#define RF_INPUT_PROMPT_STR  "» "
-#define RF_INPUT_PROMPT_VISUAL_LEN 2
+#define RF_INPUT_PROMPT_STR  "» "    // Defines the string for the input field prompt.
+#define RF_INPUT_PROMPT_VISUAL_LEN 2 // Defines the visual character length of the input prompt string.
 
-#define RF_STATUS_TITLE_LEFT_STR   "▐"
-#define RF_STATUS_TITLE_LEFT_VISUAL_LEN 1
-#define RF_STATUS_TITLE_RIGHT_STR  "▌"
-#define RF_STATUS_TITLE_RIGHT_VISUAL_LEN 1
+#define RF_STATUS_TITLE_LEFT_STR   "▐" // Defines the left decorative character for the status bar title.
+#define RF_STATUS_TITLE_LEFT_VISUAL_LEN 1 // Defines the visual length of the left status title decoration.
+#define RF_STATUS_TITLE_RIGHT_STR  "▌" // Defines the right decorative character for the status bar title.
+#define RF_STATUS_TITLE_RIGHT_VISUAL_LEN 1 // Defines the visual length of the right status title decoration.
 
-#define RF_STATUS_TIME_LEFT_STR    "«"
-#define RF_STATUS_TIME_LEFT_VISUAL_LEN 1
-#define RF_STATUS_TIME_RIGHT_STR   "»"
-#define RF_STATUS_TIME_RIGHT_VISUAL_LEN 1
+#define RF_STATUS_TIME_LEFT_STR    "«" // Defines the left decorative character for the status bar time display.
+#define RF_STATUS_TIME_LEFT_VISUAL_LEN 1 // Defines the visual length of the left status time decoration.
+#define RF_STATUS_TIME_RIGHT_STR   "»" // Defines the right decorative character for the status bar time display.
+#define RF_STATUS_TIME_RIGHT_VISUAL_LEN 1 // Defines the visual length of the right status time decoration.
 
-#define RF_LOADING_TEXT_STR        "[⢿ LOADING ⢿]"
-#define RF_LOADING_CLEAR_TEXT_STR  "             "
-#define RF_LOADING_TEXT_VISUAL_LEN 13
+#define RF_LOADING_TEXT_STR        "[⢿ LOADING ⢿]" // Defines the text string displayed during loading operations.
+#define RF_LOADING_CLEAR_TEXT_STR  "             " // Defines a string of spaces to clear the loading text.
+#define RF_LOADING_TEXT_VISUAL_LEN 13             // Defines the visual character length of the loading text string.
 // --- End Retro-Futuristic Look Definitions ---
 
 
 // --- Configuration & Constants ---
-#define DEFAULT_DB_NAME "gextux.db"
-#define MAX_STR_LEN 256
-#define MAX_NOTES_LEN 101
-#define INPUT_WIN_HEIGHT 3
-#define PRINT_CMD "lp"
-#define CANCEL_INPUT_STRING "!!CANCEL!!"
-#define STATUS_BAR_TITLE " GexTuX Customer Management v1.0 - May 2025 "
+#define DEFAULT_DB_NAME "gextux.db"         // Defines the default filename for the SQLite database.
+#define MAX_STR_LEN 256                     // Defines a general maximum length for string buffers.
+#define MAX_NOTES_LEN 101                   // Defines the maximum length for client notes (100 characters + null terminator).
+#define INPUT_WIN_HEIGHT 3                  // Defines the height (in lines) of the dedicated input window.
+#define PRINT_CMD "lp"                      // Defines the system command for printing (not used in this editor part).
+#define CANCEL_INPUT_STRING "!!CANCEL!!"    // Defines a special string input by the user to cancel an operation.
+#define STATUS_BAR_TITLE " GexTuX Customer Management v1.0 - May 2025 " // Defines the title text for the status bar.
 
 // UI Constants
-#define MAIN_WIN_BORDER_WIDTH 2
-#define INPUT_PROMPT_X 1
-#define INPUT_PROMPT_Y 1
-#define MENU_INDENT 4
-#define LIST_COL_PADDING 1
-#define DETAIL_LABEL_WIDTH 18
-#define DATETIME_FORMAT "%Y-%m-%d %H:%M:%S"
-#define DATETIME_STR_LEN 19
+#define MAIN_WIN_BORDER_WIDTH 2     // Defines the visual width of the border around the main window.
+#define INPUT_PROMPT_X 1            // Defines the starting X (column) position for prompts in the input window.
+#define INPUT_PROMPT_Y 1            // Defines the starting Y (row) position for prompts in the input window.
+#define MENU_INDENT 4               // Defines the indentation (in spaces) for menu items.
+#define LIST_COL_PADDING 1          // Defines the padding (in spaces) between columns in list displays.
+#define DETAIL_LABEL_WIDTH 18       // Defines the fixed width for labels in the client detail view.
+#define DATETIME_FORMAT "%Y-%m-%d %H:%M:%S" // Defines the format string for displaying date and time.
+#define DATETIME_STR_LEN 19         // Defines the length of the string generated by DATETIME_FORMAT (excluding null).
 
 // New Screen Layout Constants
-#define SCREEN_TITLE_Y (MAIN_WIN_BORDER_WIDTH - 1)
-#define SCREEN_SEPARATOR_Y (SCREEN_TITLE_Y + 1)
-#define SCREEN_CONTENT_Y_STD (SCREEN_SEPARATOR_Y + 1)
-#define SCREEN_CONTENT_Y_MENU (SCREEN_SEPARATOR_Y + 2)
-#define MIN_SEPARATOR_WIDTH 30
+#define SCREEN_TITLE_Y (MAIN_WIN_BORDER_WIDTH - 1) // Defines the Y-coordinate (row) for screen titles within the main window.
+#define SCREEN_SEPARATOR_Y (SCREEN_TITLE_Y + 1)   // Defines the Y-coordinate for the separator line below screen titles.
+#define SCREEN_CONTENT_Y_STD (SCREEN_SEPARATOR_Y + 1) // Defines the starting Y-coordinate for standard content area below the separator.
+#define SCREEN_CONTENT_Y_MENU (SCREEN_SEPARATOR_Y + 2) // Defines the starting Y-coordinate for menu content, allowing for extra spacing.
+#define MIN_SEPARATOR_WIDTH 30                   // Defines the minimum width for the title separator line.
 
 // Interactive List Pane Constants
-#define LIST_PANE_PERCENT 0.50
-#define DETAIL_PANE_MIN_WIDTH 45
-#define PANE_SEPARATOR_WIDTH 1
+#define LIST_PANE_PERCENT 0.50      // Defines the percentage of available width the list pane should occupy.
+#define DETAIL_PANE_MIN_WIDTH 45    // Defines the minimum width (in characters) for the detail view pane.
+#define PANE_SEPARATOR_WIDTH 1      // Defines the width (in characters) of the visual separator between panes.
 
-// Key Constants
-#define KEY_NAV_UP       KEY_UP
-#define KEY_NAV_DOWN     KEY_DOWN
-#define KEY_NAV_LEFT     KEY_LEFT
-#define KEY_NAV_RIGHT    KEY_RIGHT
-#define KEY_NAV_PPAGE    KEY_PPAGE
-#define KEY_NAV_NPAGE    KEY_NPAGE
-#define KEY_NAV_HOME     KEY_HOME
-#define KEY_NAV_END      KEY_END
-#define KEY_ACTION_SELECT '\n'
-#define KEY_ACTION_ENTER KEY_ENTER
-#define KEY_ACTION_BACK  'b'
-#define KEY_ACTION_BACK_ALT 'B'
-#define KEY_ACTION_QUIT  'q'
-#define KEY_ACTION_QUIT_ALT 'Q'
-#define KEY_EDIT_CLIENT  'e'
-#define KEY_EDIT_CLIENT_ALT 'E'
-#define KEY_ACTION_DELETE  'd'
-#define KEY_ACTION_DELETE_ALT 'D'
-#define KEY_ESC          27
+// Key Constants - mapping ncurses key codes or characters to symbolic names for actions.
+#define KEY_NAV_UP       KEY_UP        // Defines navigation key: Up arrow.
+#define KEY_NAV_DOWN     KEY_DOWN      // Defines navigation key: Down arrow.
+#define KEY_NAV_LEFT     KEY_LEFT      // Defines navigation key: Left arrow.
+#define KEY_NAV_RIGHT    KEY_RIGHT     // Defines navigation key: Right arrow.
+#define KEY_NAV_PPAGE    KEY_PPAGE     // Defines navigation key: Page Up.
+#define KEY_NAV_NPAGE    KEY_NPAGE     // Defines navigation key: Page Down.
+#define KEY_NAV_HOME     KEY_HOME      // Defines navigation key: Home.
+#define KEY_NAV_END      KEY_END       // Defines navigation key: End.
+#define KEY_ACTION_SELECT '\n'         // Defines action key: Select (typically Enter/Return key, represented as newline).
+#define KEY_ACTION_ENTER KEY_ENTER     // Defines action key: Enter (ncurses specific constant for Enter/Return).
+#define KEY_ACTION_BACK  'b'           // Defines action key: Back (lowercase 'b').
+#define KEY_ACTION_BACK_ALT 'B'        // Defines action key: Back (uppercase 'B').
+#define KEY_ACTION_QUIT  'q'           // Defines action key: Quit (lowercase 'q').
+#define KEY_ACTION_QUIT_ALT 'Q'        // Defines action key: Quit (uppercase 'Q').
+#define KEY_EDIT_CLIENT  'e'           // Defines action key: Edit client (lowercase 'e').
+#define KEY_EDIT_CLIENT_ALT 'E'        // Defines action key: Edit client (uppercase 'E').
+#define KEY_ACTION_DELETE  'd'         // Defines action key: Delete (lowercase 'd').
+#define KEY_ACTION_DELETE_ALT 'D'      // Defines action key: Delete (uppercase 'D').
+#define KEY_ESC          27            // Defines the ASCII value for the Escape key.
 
 // --- Structures ---
-typedef struct {
-    int id;
-    char business_name[MAX_STR_LEN];
-    char email[MAX_STR_LEN];
-    char phone[MAX_STR_LEN];
-    char website[MAX_STR_LEN];
-    char street[MAX_STR_LEN];
-    char city[MAX_STR_LEN];
-    char state[MAX_STR_LEN];
-    char zip_code[32];
-    char country[MAX_STR_LEN];
-    char tax_number[MAX_STR_LEN];
-    int num_employees;
-    char industry[MAX_STR_LEN];
-    char contact_person[MAX_STR_LEN];
-    char contact_email[MAX_STR_LEN];
-    char contact_phone[MAX_STR_LEN];
-    char status[MAX_STR_LEN];
-    char notes[MAX_NOTES_LEN];
-    char created_at[MAX_STR_LEN];
+typedef struct { // Defines the structure for storing comprehensive client data.
+    int id;                             // Unique identifier for the client (typically auto-incremented).
+    char business_name[MAX_STR_LEN];    // Name of the client's business.
+    char email[MAX_STR_LEN];            // Primary email address for the client's business.
+    char phone[MAX_STR_LEN];            // Primary phone number for the client's business.
+    char website[MAX_STR_LEN];          // Website URL for the client's business.
+    char street[MAX_STR_LEN];           // Street address of the client.
+    char city[MAX_STR_LEN];             // City of the client's address.
+    char state[MAX_STR_LEN];            // State or province of the client's address.
+    char zip_code[32];                  // Postal or ZIP code for the client's address.
+    char country[MAX_STR_LEN];          // Country of the client's address.
+    char tax_number[MAX_STR_LEN];       // Tax identification number for the client.
+    int num_employees;                  // Number of employees in the client's business.
+    char industry[MAX_STR_LEN];         // Industry sector the client operates in.
+    char contact_person[MAX_STR_LEN];   // Name of the primary contact person at the client's business.
+    char contact_email[MAX_STR_LEN];    // Email address of the primary contact person.
+    char contact_phone[MAX_STR_LEN];    // Phone number of the primary contact person.
+    char status[MAX_STR_LEN];           // Current status of the client (e.g., "Active", "Prospect").
+    char notes[MAX_NOTES_LEN];          // Additional notes or comments about the client.
+    char created_at[MAX_STR_LEN];       // Timestamp of when the client record was created.
 } Client;
 
-typedef struct {
-    int id;
-    char business_name[MAX_STR_LEN];
-    char city[MAX_STR_LEN];
-    char phone[MAX_STR_LEN];
-    char email[MAX_STR_LEN];
-    char contact_person[MAX_STR_LEN];
+typedef struct { // Defines a structure for storing summarized client data, used in list views.
+    int id;                             // Unique identifier for the client.
+    char business_name[MAX_STR_LEN];    // Name of the client's business.
+    char city[MAX_STR_LEN];             // City of the client's address.
+    char phone[MAX_STR_LEN];            // Primary phone number for the client's business.
+    char email[MAX_STR_LEN];            // Primary email address for the client's business.
+    char contact_person[MAX_STR_LEN];   // Name of the primary contact person.
 } ClientListItem;
 
-typedef struct {
-    ClientListItem **items_ptr;
-    int *count_ptr;
-    int *capacity_ptr;
+typedef struct { // Defines a structure to pass data to the SQLite callback for fetching list items.
+    ClientListItem **items_ptr;         // Pointer to a dynamic array of ClientListItem structures.
+    int *count_ptr;                     // Pointer to the current number of items in the array.
+    int *capacity_ptr;                  // Pointer to the current allocated capacity of the array.
 } FetchListData;
 
-typedef struct {
-    int id_width;
-    int name_width;
-    int name_col_start;
+typedef struct { // Defines a structure to hold calculated column widths for list displays.
+    int id_width;                       // Calculated width for the ID column in a list.
+    int name_width;                     // Calculated width for the Name (Business Name) column in a list.
+    int name_col_start;                 // Calculated starting X-coordinate (column) for the Name column.
 } ListColumnWidths;
 
-typedef enum {
-    INTERACTIVE_LIST_ACTION_EDIT,
-    INTERACTIVE_LIST_ACTION_DELETE
+typedef enum { // Defines an enumeration for possible actions originating from an interactive list selection.
+    INTERACTIVE_LIST_ACTION_EDIT,       // Indicates that the selected item should be edited.
+    INTERACTIVE_LIST_ACTION_DELETE      // Indicates that the selected item should be deleted.
 } InteractiveListAction;
 
 
 // --- Global Variables ---
-sqlite3 *db = NULL;
-WINDOW *main_win = NULL, *input_win = NULL, *status_win = NULL;
-int max_y, max_x;
-volatile sig_atomic_t resize_pending = 0;
-volatile sig_atomic_t exit_requested = 0;
-char db_path[MAX_STR_LEN];
+sqlite3 *db = NULL;                     // Global pointer to the SQLite database connection object. Initialized to NULL.
+WINDOW *main_win = NULL, *input_win = NULL, *status_win = NULL; // Global pointers for ncurses windows. Initialized to NULL.
+int max_y, max_x;                       // Global variables to store the terminal's maximum rows (max_y) and columns (max_x).
+volatile sig_atomic_t resize_pending = 0; // A volatile flag indicating if a SIGWINCH (resize) signal is pending.
+volatile sig_atomic_t exit_requested = 0; // A volatile flag indicating if a SIGINT or SIGTERM signal has been received.
+char db_path[MAX_STR_LEN];              // Global buffer to store the path to the SQLite database file.
 
 // --- Function Prototypes ---
-// Ncurses & Windowing
-void init_ncurses();
-void cleanup_ncurses();
-void create_windows();
-void destroy_windows();
-void handle_resize(int sig);
-void check_and_handle_resize();
-void handle_exit_signal(int sig);
-void draw_custom_box(WINDOW *win);
+// Ncurses & Windowing related function declarations.
+void init_ncurses();                    // Initializes the ncurses environment.
+void cleanup_ncurses();                 // Cleans up ncurses resources before program termination.
+void create_windows();                  // Creates the main application windows (main, input, status).
+void destroy_windows();                 // Destroys/deletes the ncurses windows.
+void handle_resize(int sig);            // Signal handler for SIGWINCH (terminal resize).
+void check_and_handle_resize();         // Checks the resize_pending flag and processes resize if needed.
+void handle_exit_signal(int sig);       // Signal handler for SIGINT/SIGTERM (exit signals).
+void draw_custom_box(WINDOW *win);      // Draws a custom border around a specified ncurses window.
 
-// Status Bar
-void clear_status();
-void show_status(const char *fmt, ...);
-void show_error(const char *fmt, ...);
-void update_status_bar_datetime();
-void show_loading_indicator(bool show);
+// Status Bar related function declarations.
+void clear_status();                    // Clears the status bar and redraws default elements (title, time).
+void show_status(const char *fmt, ...); // Displays a formatted message on the status bar.
+void show_error(const char *fmt, ...);  // Displays a formatted error message on the status bar.
+void update_status_bar_datetime();      // Updates the date and time display on the status bar.
+void show_loading_indicator(bool show); // Shows or hides a loading indicator on the status bar.
 
-// Database
-int init_db(const char* db_filename);
-void close_db();
-int db_execute(const char *sql, int (*callback)(void*,int,char**,char**), void *data);
-static int check_column_exists(const char *table_name, const char *column_name);
-int fetch_client_by_id(int id, Client *client);
-int db_insert_client(const Client *client_data);
-int db_update_client(const Client *client_data);
-int db_delete_client(int client_id);
+// Database related function declarations.
+int init_db(const char* db_filename);   // Initializes the database connection and schema.
+void close_db();                        // Closes the database connection.
+int db_execute(const char *sql, int (*callback)(void*,int,char**,char**), void *data); // Executes an SQL query.
+static int check_column_exists(const char *table_name, const char *column_name); // Checks if a column exists in a table (static linkage).
+int fetch_client_by_id(int id, Client *client); // Fetches a single client's full details by ID.
+int db_insert_client(const Client *client_data); // Inserts a new client record into the database.
+int db_update_client(const Client *client_data); // Updates an existing client record in the database.
+int db_delete_client(int client_id);    // Deletes a client record from the database by ID.
 
-// Input Helpers
-int get_string_input(WINDOW *win, int y, int x, const char *prompt, char *buffer, int max_len, bool allow_empty, const char *current_value_display);
-int get_int_input(WINDOW *win, int y, int x, const char *prompt, int *value, int current_value);
-int select_client_status(char *selected_status, const char *current_status);
+// Input Helper function declarations.
+int get_string_input(WINDOW *win, int y, int x, const char *prompt, char *buffer, int max_len, bool allow_empty, const char *current_value_display); // Gets string input from the user.
+int get_int_input(WINDOW *win, int y, int x, const char *prompt, int *value, int current_value); // Gets integer input from the user.
+int select_client_status(char *selected_status, const char *current_status); // Allows user to select a client status from a list.
 
-// Core Screens & UI Logic
-void display_editor_main_menu();
-void add_new_customer_screen();
-void customer_search_workflow(const char *screen_title, const char *search_prompt_detail, InteractiveListAction action);
-void edit_customer_form_screen(int client_id);
+// Core Screens & UI Logic function declarations.
+void display_editor_main_menu();        // Displays the main menu of the customer editor.
+void add_new_customer_screen();         // Displays the screen/form for adding a new customer.
+void customer_search_workflow(const char *screen_title, const char *search_prompt_detail, InteractiveListAction action); // Manages the customer search and subsequent action.
+void edit_customer_form_screen(int client_id); // Displays the screen/form for editing an existing customer.
 
-// New Interactive List with Detail Pane
-void display_interactive_client_list(const char *title, const char *sql_query, InteractiveListAction action_type);
-void calculate_list_column_widths_for_pane(ListColumnWidths *widths, int pane_content_width);
-void draw_list_header_in_pane(WINDOW *win, const ListColumnWidths *col_widths, int pane_start_y, int pane_start_x, int pane_content_width);
-void draw_list_item_in_pane(WINDOW *win, int y_on_screen, const ClientListItem *item, const ListColumnWidths *col_widths, bool highlighted, int pane_start_x, int pane_content_width);
-void draw_client_details_in_pane(WINDOW *win, const Client *client, int pane_start_y, int pane_start_x, int pane_content_width);
-void wclr_pane_line(WINDOW *win, int y, int x, int width);
+// New Interactive List with Detail Pane function declarations.
+void display_interactive_client_list(const char *title, const char *sql_query, InteractiveListAction action_type); // Displays a list of clients with a detail pane.
+void calculate_list_column_widths_for_pane(ListColumnWidths *widths, int pane_content_width); // Calculates column widths for the list pane.
+void draw_list_header_in_pane(WINDOW *win, const ListColumnWidths *col_widths, int pane_start_y, int pane_start_x, int pane_content_width); // Draws the header for the list pane.
+void draw_list_item_in_pane(WINDOW *win, int y_on_screen, const ClientListItem *item, const ListColumnWidths *col_widths, bool highlighted, int pane_start_x, int pane_content_width); // Draws a single item in the list pane.
+void draw_client_details_in_pane(WINDOW *win, const Client *client, int pane_start_y, int pane_start_x, int pane_content_width); // Draws client details in the detail pane.
+void wclr_pane_line(WINDOW *win, int y, int x, int width); // Clears a line segment within a pane.
 
 
-// Other
-void execute_gextux_crm();
+// Other utility function declarations.
+void execute_gextux_crm();              // Executes the main GexTuX CRM program.
 
-// Callbacks
-int fetch_list_items_callback(void *data, int argc, char **argv, char **azColName);
+// Callback function declarations (used with SQLite).
+int fetch_list_items_callback(void *data, int argc, char **argv, char **azColName); // SQLite callback for fetching client list items.
 
-// --- Color Pair Definitions ---
-#define COLOR_PAIR_DEFAULT 1
-#define COLOR_PAIR_ERROR 2
-#define COLOR_PAIR_HIGHLIGHT 3
-#define COLOR_PAIR_STATUS_BG 4
-#define COLOR_PAIR_STATUS_TEXT 5
-#define COLOR_PAIR_LOADING 6
-#define COLOR_PAIR_INPUT_CURRENT 7
-#define COLOR_PAIR_PANE_SEPARATOR 8
-#define COLOR_PAIR_LIST_HEADER 9
+// --- Color Pair Definitions --- (Symbolic names for ncurses color pairs)
+#define COLOR_PAIR_DEFAULT 1        // Default color pair for general text.
+#define COLOR_PAIR_ERROR 2          // Color pair for error messages.
+#define COLOR_PAIR_HIGHLIGHT 3      // Color pair for highlighted items (e.g., selected menu option).
+#define COLOR_PAIR_STATUS_BG 4      // Color pair for the status bar background.
+#define COLOR_PAIR_STATUS_TEXT 5    // Color pair for text on the status bar.
+#define COLOR_PAIR_LOADING 6        // Color pair for the loading indicator text.
+#define COLOR_PAIR_INPUT_CURRENT 7  // Color pair for displaying current values in input prompts.
+#define COLOR_PAIR_PANE_SEPARATOR 8 // Color pair for the visual separator between panes.
+#define COLOR_PAIR_LIST_HEADER 9    // Color pair for the header row in list views.
+
 
 // --- Signal Handlers ---
 void handle_resize(int sig) {
