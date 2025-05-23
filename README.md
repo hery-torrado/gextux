@@ -84,7 +84,8 @@ To compile and run GexTuX Customer Editor, you will need:
 
 ## Installation
 
-After successful compilation, an executable file named `gextux_customer_editor` will be created. No special installation is required. You can copy this executable to a directory in your system's `PATH` (e.g., `/usr/local/bin`) for easier access.
+After successful compilation, an executable file named `gextux_customer_editor` will be created. No special installation is required. You can copy
+this executable to a directory in your system's `PATH` (e.g., `/usr/local/bin`) for easier access.
 
 ## Usage
 
@@ -171,12 +172,13 @@ File: By default, the application uses gextux.db in the directory from which it'
 Schema: The clients table stores customer information. Key fields include:
 id (INTEGER, PRIMARY KEY, AUTOINCREMENT)
 business_name (TEXT, NOT NULL, UNIQUE, COLLATE NOCASE)
-email, phone, website, street, city, state, zip_code, country, tax_number, industry, contact_person, contact_email, contact_phone, notes (all TEXT)
+email, phone, website, street, city, state, zip_code, country, tax_number, industry, contact_person, contact_email, contact_phone, notes(all TEXT)
 num_employees (INTEGER)
 status (TEXT, with CHECK constraint: 'Active', 'Inactive', 'Prospect', 'Lead', 'Former')
 created_at (DATETIME, DEFAULT CURRENT_TIMESTAMP)
 
-The application will attempt to create this table if it doesn't exist and add tax_number and zip_code columns if they are missing from an older schema.
+The application will attempt to create this table if it doesn't exist and add tax_number and zip_code columns if they are missing from an older
+schema.
 
 UTF-8 Support
 
@@ -189,7 +191,8 @@ Font: You need a font installed and selected in your terminal that includes the 
 
 Many modern "Nerd Fonts" or other comprehensive Unicode fonts will work.
 
-Locale: Your system locale should be set to one that supports UTF-8 (e.g., en_US.UTF-8). The program attempts to set the locale via setlocale(LC_ALL, "").
+Locale: Your system locale should be set to one that supports UTF-8 (e.g., en_US.UTF-8). The program attempts to set the locale via
+setlocale(LC_ALL, "").
 
 ncursesw: The program must be compiled against ncursesw (wide character support) as instructed in the "Compilation" section.
 
@@ -197,15 +200,19 @@ If characters appear as question marks, boxes, or are misaligned, check your ter
 
 Returning to GexTuX CRM
 
-The main menu includes an option "4. Return to Main Program". Selecting this will attempt to close the editor and execute a program named gextux_crm. For this to work, gextux_crm must be an executable program found in your system's PATH.
+The main menu includes an option "4. Return to Main Program". Selecting this will attempt to close the editor and execute
+a program named gextux_crm. For this to work, gextux_crm must be an executable program found in your system's PATH.
 Troubleshooting. Note that gextux_crm is not already made.
 
 Incorrect Character Display: See the "UTF-8 Support" section.
 
-Database Errors: Ensure you have write permissions in the directory where the database file is being created/accessed. Check SQLite3 error messages displayed in the status bar.
+Database Errors: Ensure you have write permissions in the directory where the database file is being created/accessed. Check SQLite3
+error messages displayed in the status bar.
 
-"Failed to launch gextux_crm": This means the gextux_crm executable could not be found or executed when trying to return to the main program. Ensure it's installed and in your PATH.
+"Failed to launch gextux_crm": This means the gextux_crm executable could not be found or executed when trying to return to
+the main program. Ensure it's installed and in your PATH.
 
-wcwidth warnings during compilation or runtime: The code includes macros (_GNU_SOURCE, etc.) intended to help wcwidth function correctly with UTF-8. If issues persist, it might be related to specific terminal or library versions. The program should generally still function.
+wcwidth warnings during compilation or runtime: The code includes macros (_GNU_SOURCE, etc.) intended to help wcwidth function
+correctly with UTF-8. If issues persist, it might be related to specific terminal or library versions. The program should generally still function.
 
 
