@@ -1,0 +1,1 @@
+gcc -Os gextux_customer_management.c -o gextux_customer_management -lncursesw -lsqlite3

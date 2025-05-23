@@ -1,347 +1,321 @@
-#define _GNU_SOURCE              // Enables GNU-specific extensions, often for POSIX/XSI features like wcwidth.
-#define _POSIX_C_SOURCE 200809L  // Defines the version of the POSIX standard to adhere to for compatibility.
-#define _XOPEN_SOURCE_EXTENDED 1 // Enables X/Open System Interfaces (XSI) extensions, for types like cchar_t.
+// ADD THIS AT THE VERY TOP OF THE FILE, BEFORE ANY #include
+#define _POSIX_C_SOURCE 200809L
 
-#include <wchar.h>    // For wide character functions (wcwidth, mbtowc, setcchar) and types (wchar_t, cchar_t).
-#include <ncurses.h>  // For the ncurses terminal handling library; should ideally be after wchar.h if dependent.
-#include <stdlib.h>   // For standard library functions like memory allocation (malloc, free), string conversion (atoi).
-#include <string.h>   // For string manipulation functions (strcpy, strlen, strcmp).
-#include <strings.h>  // For case-insensitive string comparison (strcasecmp).
-#include <sqlite3.h>  // For SQLite database interface functions and types.
-#include <ctype.h>    // For character classification functions (isprint, toupper, isspace).
-#include <time.h>     // For time and date functions, used for displaying current time.
-#include <stdarg.h>   // For variable argument list handling (va_list, va_start, va_end).
-#include <stdio.h>    // For standard input/output functions (popen, pclose, fprintf, snprintf).
-#include <sys/wait.h> // For process waiting functions (WIFEXITED, WEXITSTATUS), used with pclose.
-#include <signal.h>   // For signal handling (SIGWINCH for resize, SIGINT/SIGTERM for exit).
-#include <unistd.h>   // For POSIX operating system API (execlp for executing programs, getopt for command-line options).
-#include <stdbool.h>  // For the boolean type (bool) and its values (true, false).
-#include <locale.h>   // Required for setlocale, to enable non-ASCII (UTF-8) character support.
+// --- Instructions for Non-ASCII (UTF-8) Character Support ---
+// 1. Ensure this program is compiled and linked against the ncursesw library.
+//    Example: gcc your_program.c -o your_program -lsqlite3 -lncursesw
+//    (Note: Order of -l flags can matter; typically libraries ncurses depends on come after it,
+//     but for common system libraries like sqlite3, this order is usually fine.
+//     If ncursesw is the default ncurses on your system, -lncurses might suffice,
+//     but explicitly using -lncursesw is safer for wide character support.)
+// 2. The terminal emulator running this program must be configured to use UTF-8 encoding.
+// 3. The setlocale(LC_ALL, "") function must be called early in the program's execution
+//    to initialize locale settings (this is done in init_ncurses() below).
+// ---
 
-// --- Retro-Futuristic Look Character Definitions ---
-// These definitions require a UTF-8 capable terminal and the ncursesw library (wide character support).
-
-// Wide character constants for border elements and single characters using UTF-8 literals.
-#define WC_RF_VLINE        L'║' // Defines a wide character for a double vertical line border segment.
-#define WC_RF_HLINE        L'═' // Defines a wide character for a double horizontal line border segment.
-#define WC_RF_ULCORNER     L'╔' // Defines a wide character for a double upper-left corner border segment.
-#define WC_RF_URCORNER     L'╗' // Defines a wide character for a double upper-right corner border segment.
-#define WC_RF_LLCORNER     L'╚' // Defines a wide character for a double lower-left corner border segment.
-#define WC_RF_LRCORNER     L'╝' // Defines a wide character for a double lower-right corner border segment.
-
-#define WC_RF_TITLE_SEP_CHAR L'━' // Defines a wide character for a heavy horizontal line, used as a title separator.
-#define WC_RF_PANE_VSEP      L'┃' // Defines a wide character for a heavy vertical line, used for separating panes.
-
-// String constants (UTF-8 encoded) - these are standard C strings, but represent UTF-8 characters.
-#define RF_MENU_SELECTOR_STR "➔ "    // Defines the string for the menu item selector (arrow and space).
-#define RF_MENU_SELECTOR_VISUAL_LEN 2 // Defines the visual character length of the menu selector string.
-
-#define RF_INPUT_PROMPT_STR  "» "    // Defines the string for the input field prompt.
-#define RF_INPUT_PROMPT_VISUAL_LEN 2 // Defines the visual character length of the input prompt string.
-
-#define RF_STATUS_TITLE_LEFT_STR   "▐" // Defines the left decorative character for the status bar title.
-#define RF_STATUS_TITLE_LEFT_VISUAL_LEN 1 // Defines the visual length of the left status title decoration.
-#define RF_STATUS_TITLE_RIGHT_STR  "▌" // Defines the right decorative character for the status bar title.
-#define RF_STATUS_TITLE_RIGHT_VISUAL_LEN 1 // Defines the visual length of the right status title decoration.
-
-#define RF_STATUS_TIME_LEFT_STR    "«" // Defines the left decorative character for the status bar time display.
-#define RF_STATUS_TIME_LEFT_VISUAL_LEN 1 // Defines the visual length of the left status time decoration.
-#define RF_STATUS_TIME_RIGHT_STR   "»" // Defines the right decorative character for the status bar time display.
-#define RF_STATUS_TIME_RIGHT_VISUAL_LEN 1 // Defines the visual length of the right status time decoration.
-
-#define RF_LOADING_TEXT_STR        "[⢿ LOADING ⢿]" // Defines the text string displayed during loading operations.
-#define RF_LOADING_CLEAR_TEXT_STR  "             " // Defines a string of spaces to clear the loading text.
-#define RF_LOADING_TEXT_VISUAL_LEN 13             // Defines the visual character length of the loading text string.
-// --- End Retro-Futuristic Look Definitions ---
+#include <ncurses.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>  // For strcasecmp
+#include <sqlite3.h>
+#include <ctype.h>    // For isprint, toupper, isspace
+#include <time.h>     // For date display
+#include <stdarg.h>   // For va_list, etc.
+#include <stdio.h>    // For popen, pclose, fprintf, FILE*, snprintf
+#include <sys/wait.h> // For WIFEXITED, WEXITSTATUS with pclose
+#include <signal.h>   // For SIGWINCH handling
+#include <unistd.h>   // For execlp, getopt
+#include <stdbool.h>  // For bool type
+#include <locale.h>   // Required for setlocale (for non-ASCII character support)
 
 // --- Configuration & Constants ---
-#define DEFAULT_DB_NAME "gextux.db"         // Defines the default filename for the SQLite database.
-#define MAX_STR_LEN 256                     // Defines a general maximum length for string buffers.
-#define MAX_NOTES_LEN 101                   // Defines the maximum length for client notes (100 characters + null terminator).
-#define INPUT_WIN_HEIGHT 3                  // Defines the height (in lines) of the dedicated input window.
-#define PRINT_CMD "lp"                      // Defines the system command for printing (not used in this editor part).
-#define CANCEL_INPUT_STRING "!!CANCEL!!"    // Defines a special string input by the user to cancel an operation.
-#define STATUS_BAR_TITLE " GexTuX Customer Management v1.0 - May 2025 " // Defines the title text for the status bar.
+#define DEFAULT_DB_NAME "gextux.db"
+#define MAX_STR_LEN 256
+#define MAX_NOTES_LEN 101 // Changed from 1024 to 101 (100 chars + null terminator)
+#define INPUT_WIN_HEIGHT 3
+#define PRINT_CMD "lp" // Default print command
+#define CANCEL_INPUT_STRING "!!CANCEL!!" // Special string to cancel form input
+#define STATUS_BAR_TITLE " GexTuX Customer Management v1.0 - May 2025 " // Program title for status bar
 
 // UI Constants
-#define MAIN_WIN_BORDER_WIDTH 2     // Defines the visual width of the border around the main window.
-#define INPUT_PROMPT_X 1            // Defines the starting X (column) position for prompts in the input window.
-#define INPUT_PROMPT_Y 1            // Defines the starting Y (row) position for prompts in the input window.
-#define MENU_INDENT 4               // Defines the indentation (in spaces) for menu items.
-#define LIST_COL_PADDING 1          // Defines the padding (in spaces) between columns in list displays.
-#define DETAIL_LABEL_WIDTH 18       // Defines the fixed width for labels in the client detail view.
-#define DATETIME_FORMAT "%Y-%m-%d %H:%M:%S" // Defines the format string for displaying date and time.
-#define DATETIME_STR_LEN 19         // Defines the length of the string generated by DATETIME_FORMAT (excluding null).
+#define MAIN_WIN_BORDER_WIDTH 2 // Internal padding from main_win's box to content area start
+#define INPUT_PROMPT_X 1
+#define INPUT_PROMPT_Y 1
+#define MENU_INDENT 4
+#define LIST_COL_PADDING 1
+#define DETAIL_LABEL_WIDTH 18
+#define DATETIME_FORMAT "%Y-%m-%d %H:%M:%S"
+#define DATETIME_STR_LEN 20
 
 // New Screen Layout Constants
-#define SCREEN_TITLE_Y (MAIN_WIN_BORDER_WIDTH - 1) // Defines the Y-coordinate (row) for screen titles within the main window.
-#define SCREEN_SEPARATOR_Y (SCREEN_TITLE_Y + 1)   // Defines the Y-coordinate for the separator line below screen titles.
-#define SCREEN_CONTENT_Y_STD (SCREEN_SEPARATOR_Y + 1) // Defines the starting Y-coordinate for standard content area below the separator.
-#define SCREEN_CONTENT_Y_MENU (SCREEN_SEPARATOR_Y + 2) // Defines the starting Y-coordinate for menu content, allowing for extra spacing.
-#define MIN_SEPARATOR_WIDTH 30                   // Defines the minimum width for the title separator line.
+#define SCREEN_TITLE_Y (MAIN_WIN_BORDER_WIDTH - 1) // Typically 1 if MAIN_WIN_BORDER_WIDTH is 2
+#define SCREEN_SEPARATOR_Y (SCREEN_TITLE_Y + 1)    // Typically 2
+#define SCREEN_CONTENT_Y_STD (SCREEN_SEPARATOR_Y + 1) // Typically 3, for text/details after separator
+#define SCREEN_CONTENT_Y_MENU (SCREEN_SEPARATOR_Y + 2) // Typically 4, for menu items, allowing more space
+#define MIN_SEPARATOR_WIDTH 30                         // Minimum width for the separator line under titles
 
 // Interactive List Pane Constants
-#define LIST_PANE_PERCENT 0.50      // Defines the percentage of available width the list pane should occupy.
-#define DETAIL_PANE_MIN_WIDTH 45    // Defines the minimum width (in characters) for the detail view pane.
-#define PANE_SEPARATOR_WIDTH 1      // Defines the width (in characters) of the visual separator between panes.
+#define LIST_PANE_PERCENT 0.50 // Default percentage for the list pane
+#define DETAIL_PANE_MIN_WIDTH 45
+#define PANE_SEPARATOR_WIDTH 1
 
-// Key Constants - mapping ncurses key codes or characters to symbolic names for actions.
-#define KEY_NAV_UP       KEY_UP        // Defines navigation key: Up arrow.
-#define KEY_NAV_DOWN     KEY_DOWN      // Defines navigation key: Down arrow.
-#define KEY_NAV_LEFT     KEY_LEFT      // Defines navigation key: Left arrow.
-#define KEY_NAV_RIGHT    KEY_RIGHT     // Defines navigation key: Right arrow.
-#define KEY_NAV_PPAGE    KEY_PPAGE     // Defines navigation key: Page Up.
-#define KEY_NAV_NPAGE    KEY_NPAGE     // Defines navigation key: Page Down.
-#define KEY_NAV_HOME     KEY_HOME      // Defines navigation key: Home.
-#define KEY_NAV_END      KEY_END       // Defines navigation key: End.
-#define KEY_ACTION_SELECT '\n'         // Defines action key: Select (typically Enter/Return key, represented as newline).
-#define KEY_ACTION_ENTER KEY_ENTER     // Defines action key: Enter (ncurses specific constant for Enter/Return).
-#define KEY_ACTION_BACK  'b'           // Defines action key: Back (lowercase 'b').
-#define KEY_ACTION_BACK_ALT 'B'        // Defines action key: Back (uppercase 'B').
-#define KEY_ACTION_QUIT  'q'           // Defines action key: Quit (lowercase 'q').
-#define KEY_ACTION_QUIT_ALT 'Q'        // Defines action key: Quit (uppercase 'Q').
-#define KEY_EDIT_CLIENT  'e'           // Defines action key: Edit client (lowercase 'e').
-#define KEY_EDIT_CLIENT_ALT 'E'        // Defines action key: Edit client (uppercase 'E').
-#define KEY_ACTION_DELETE  'd'         // Defines action key: Delete (lowercase 'd').
-#define KEY_ACTION_DELETE_ALT 'D'      // Defines action key: Delete (uppercase 'D').
-#define KEY_ESC          27            // Defines the ASCII value for the Escape key.
+// Key Constants
+#define KEY_NAV_UP       KEY_UP
+#define KEY_NAV_DOWN     KEY_DOWN
+#define KEY_NAV_LEFT     KEY_LEFT
+#define KEY_NAV_RIGHT    KEY_RIGHT
+#define KEY_NAV_PPAGE    KEY_PPAGE
+#define KEY_NAV_NPAGE    KEY_NPAGE
+#define KEY_NAV_HOME     KEY_HOME
+#define KEY_NAV_END      KEY_END
+#define KEY_ACTION_SELECT '\n'
+#define KEY_ACTION_ENTER KEY_ENTER
+#define KEY_ACTION_BACK  'b'
+#define KEY_ACTION_BACK_ALT 'B'
+#define KEY_ACTION_QUIT  'q'
+#define KEY_ACTION_QUIT_ALT 'Q'
+#define KEY_EDIT_CLIENT  'e'
+#define KEY_EDIT_CLIENT_ALT 'E'
+#define KEY_ACTION_DELETE  'd'
+#define KEY_ACTION_DELETE_ALT 'D'
+#define KEY_ESC          27
 
 // --- Structures ---
-typedef struct { // Defines the structure for storing comprehensive client data.
-    int id;                             // Unique identifier for the client (typically auto-incremented).
-    char business_name[MAX_STR_LEN];    // Name of the client's business.
-    char email[MAX_STR_LEN];            // Primary email address for the client's business.
-    char phone[MAX_STR_LEN];            // Primary phone number for the client's business.
-    char website[MAX_STR_LEN];          // Website URL for the client's business.
-    char street[MAX_STR_LEN];           // Street address of the client.
-    char city[MAX_STR_LEN];             // City of the client's address.
-    char state[MAX_STR_LEN];            // State or province of the client's address.
-    char zip_code[32];                  // Postal or ZIP code for the client's address.
-    char country[MAX_STR_LEN];          // Country of the client's address.
-    char tax_number[MAX_STR_LEN];       // Tax identification number for the client.
-    int num_employees;                  // Number of employees in the client's business.
-    char industry[MAX_STR_LEN];         // Industry sector the client operates in.
-    char contact_person[MAX_STR_LEN];   // Name of the primary contact person at the client's business.
-    char contact_email[MAX_STR_LEN];    // Email address of the primary contact person.
-    char contact_phone[MAX_STR_LEN];    // Phone number of the primary contact person.
-    char status[MAX_STR_LEN];           // Current status of the client (e.g., "Active", "Prospect").
-    char notes[MAX_NOTES_LEN];          // Additional notes or comments about the client.
-    char created_at[MAX_STR_LEN];       // Timestamp of when the client record was created.
+typedef struct {
+    int id;
+    char business_name[MAX_STR_LEN];
+    char email[MAX_STR_LEN];
+    char phone[MAX_STR_LEN];
+    char website[MAX_STR_LEN];
+    char street[MAX_STR_LEN];
+    char city[MAX_STR_LEN];
+    char state[MAX_STR_LEN];
+    char zip_code[32];
+    char country[MAX_STR_LEN];
+    char tax_number[MAX_STR_LEN];
+    int num_employees;
+    char industry[MAX_STR_LEN];
+    char contact_person[MAX_STR_LEN];
+    char contact_email[MAX_STR_LEN];
+    char contact_phone[MAX_STR_LEN];
+    char status[MAX_STR_LEN];
+    char notes[MAX_NOTES_LEN]; // Size will be 101
+    char created_at[MAX_STR_LEN];
 } Client;
 
-typedef struct { // Defines a structure for storing summarized client data, used in list views.
-    int id;                             // Unique identifier for the client.
-    char business_name[MAX_STR_LEN];    // Name of the client's business.
-    char city[MAX_STR_LEN];             // City of the client's address.
-    char phone[MAX_STR_LEN];            // Primary phone number for the client's business.
-    char email[MAX_STR_LEN];            // Primary email address for the client's business.
-    char contact_person[MAX_STR_LEN];   // Name of the primary contact person.
+typedef struct {
+    int id;
+    char business_name[MAX_STR_LEN];
+    // The following fields are fetched for potential future use or if ClientListItem needs to be more versatile,
+    // but they are not currently displayed in the list pane itself.
+    char city[MAX_STR_LEN];
+    char phone[MAX_STR_LEN];
+    char email[MAX_STR_LEN];
+    char contact_person[MAX_STR_LEN];
 } ClientListItem;
 
-typedef struct { // Defines a structure to pass data to the SQLite callback for fetching list items.
-    ClientListItem **items_ptr;         // Pointer to a dynamic array of ClientListItem structures.
-    int *count_ptr;                     // Pointer to the current number of items in the array.
-    int *capacity_ptr;                  // Pointer to the current allocated capacity of the array.
+typedef struct {
+    ClientListItem **items_ptr;
+    int *count_ptr;
+    int *capacity_ptr;
 } FetchListData;
 
-typedef struct { // Defines a structure to hold calculated column widths for list displays.
-    int id_width;                       // Calculated width for the ID column in a list.
-    int name_width;                     // Calculated width for the Name (Business Name) column in a list.
-    int name_col_start;                 // Calculated starting X-coordinate (column) for the Name column.
-} ListColumnWidths;
+typedef struct {
+    int id_width;
+    int name_width;
+    int name_col_start;
+} ListColumnWidths; // Simplified: Removed unused width/column start fields
 
-typedef enum { // Defines an enumeration for possible actions originating from an interactive list selection.
-    INTERACTIVE_LIST_ACTION_EDIT,       // Indicates that the selected item should be edited.
-    INTERACTIVE_LIST_ACTION_DELETE      // Indicates that the selected item should be deleted.
+typedef enum {
+    INTERACTIVE_LIST_ACTION_EDIT,
+    INTERACTIVE_LIST_ACTION_DELETE
 } InteractiveListAction;
 
 
 // --- Global Variables ---
-sqlite3 *db = NULL;                     // Global pointer to the SQLite database connection object. Initialized to NULL.
-WINDOW *main_win = NULL, *input_win = NULL, *status_win = NULL; // Global pointers for ncurses windows. Initialized to NULL.
-int max_y, max_x;                       // Global variables to store the terminal's maximum rows (max_y) and columns (max_x).
-volatile sig_atomic_t resize_pending = 0; // A volatile flag indicating if a SIGWINCH (resize) signal is pending.
-volatile sig_atomic_t exit_requested = 0; // A volatile flag indicating if a SIGINT or SIGTERM signal has been received.
-char db_path[MAX_STR_LEN];              // Global buffer to store the path to the SQLite database file.
+sqlite3 *db = NULL;
+WINDOW *main_win = NULL, *input_win = NULL, *status_win = NULL;
+int max_y, max_x;
+volatile sig_atomic_t resize_pending = 0;
+volatile sig_atomic_t exit_requested = 0;
+char db_path[MAX_STR_LEN];
 
 // --- Function Prototypes ---
-// Ncurses & Windowing related function declarations.
-void init_ncurses();                    // Initializes the ncurses environment.
-void cleanup_ncurses();                 // Cleans up ncurses resources before program termination.
-void create_windows();                  // Creates the main application windows (main, input, status).
-void destroy_windows();                 // Destroys/deletes the ncurses windows.
-void handle_resize(int sig);            // Signal handler for SIGWINCH (terminal resize).
-void check_and_handle_resize();         // Checks the resize_pending flag and processes resize if needed.
-void handle_exit_signal(int sig);       // Signal handler for SIGINT/SIGTERM (exit signals).
-void draw_custom_box(WINDOW *win);      // Draws a custom border around a specified ncurses window.
+// Ncurses & Windowing
+void init_ncurses();
+void cleanup_ncurses();
+void create_windows();
+void destroy_windows();
+void handle_resize(int sig);
+void check_and_handle_resize();
+void handle_exit_signal(int sig);
 
-// Status Bar related function declarations.
-void clear_status();                    // Clears the status bar and redraws default elements (title, time).
-void show_status(const char *fmt, ...); // Displays a formatted message on the status bar.
-void show_error(const char *fmt, ...);  // Displays a formatted error message on the status bar.
-void update_status_bar_datetime();      // Updates the date and time display on the status bar.
-void show_loading_indicator(bool show); // Shows or hides a loading indicator on the status bar.
+// Status Bar
+void clear_status();
+void show_status(const char *fmt, ...);
+void show_error(const char *fmt, ...);
+void update_status_bar_datetime();
+void show_loading_indicator(bool show);
 
-// Database related function declarations.
-int init_db(const char* db_filename);   // Initializes the database connection and schema.
-void close_db();                        // Closes the database connection.
-int db_execute(const char *sql, int (*callback)(void*,int,char**,char**), void *data); // Executes an SQL query.
-static int check_column_exists(const char *table_name, const char *column_name); // Checks if a column exists in a table (static linkage).
-int fetch_client_by_id(int id, Client *client); // Fetches a single client's full details by ID.
-int db_insert_client(const Client *client_data); // Inserts a new client record into the database.
-int db_update_client(const Client *client_data); // Updates an existing client record in the database.
-int db_delete_client(int client_id);    // Deletes a client record from the database by ID.
+// Database
+int init_db(const char* db_filename);
+void close_db();
+int db_execute(const char *sql, int (*callback)(void*,int,char**,char**), void *data);
+static int check_column_exists(const char *table_name, const char *column_name);
+int fetch_client_by_id(int id, Client *client);
+int db_insert_client(const Client *client_data);
+int db_update_client(const Client *client_data);
+int db_delete_client(int client_id);
 
-// Input Helper function declarations.
-int get_string_input(WINDOW *win, int y, int x, const char *prompt, char *buffer, int max_len, bool allow_empty, const char *current_value_display); // Gets string input from the user.
-int get_int_input(WINDOW *win, int y, int x, const char *prompt, int *value, int current_value); // Gets integer input from the user.
-int select_client_status(char *selected_status, const char *current_status); // Allows user to select a client status from a list.
+// Input Helpers
+int get_string_input(WINDOW *win, int y, int x, const char *prompt, char *buffer, int max_len, bool allow_empty, const char *current_value_display);
+int get_int_input(WINDOW *win, int y, int x, const char *prompt, int *value, int current_value);
+int select_client_status(char *selected_status, const char *current_status);
 
-// Core Screens & UI Logic function declarations.
-void display_editor_main_menu();        // Displays the main menu of the customer editor.
-void add_new_customer_screen();         // Displays the screen/form for adding a new customer.
-void customer_search_workflow(const char *screen_title, const char *search_prompt_detail, InteractiveListAction action); // Manages the customer search and subsequent action.
-void edit_customer_form_screen(int client_id); // Displays the screen/form for editing an existing customer.
+// Core Screens & UI Logic
+void display_editor_main_menu();
+void add_new_customer_screen();
+void customer_search_workflow(const char *screen_title, const char *search_prompt_detail, InteractiveListAction action); // Refactored
+void edit_customer_form_screen(int client_id);
 
-// New Interactive List with Detail Pane function declarations.
-void display_interactive_client_list(const char *title, const char *sql_query, InteractiveListAction action_type); // Displays a list of clients with a detail pane.
-void calculate_list_column_widths_for_pane(ListColumnWidths *widths, int pane_content_width); // Calculates column widths for the list pane.
-void draw_list_header_in_pane(WINDOW *win, const ListColumnWidths *col_widths, int pane_start_y, int pane_start_x, int pane_content_width); // Draws the header for the list pane.
-void draw_list_item_in_pane(WINDOW *win, int y_on_screen, const ClientListItem *item, const ListColumnWidths *col_widths, bool highlighted, int pane_start_x, int pane_content_width); // Draws a single item in the list pane.
-void draw_client_details_in_pane(WINDOW *win, const Client *client, int pane_start_y, int pane_start_x, int pane_content_width); // Draws client details in the detail pane.
-void wclr_pane_line(WINDOW *win, int y, int x, int width); // Clears a line segment within a pane.
+// New Interactive List with Detail Pane
+void display_interactive_client_list(const char *title, const char *sql_query, InteractiveListAction action_type);
+void calculate_list_column_widths_for_pane(ListColumnWidths *widths, int pane_content_width);
+void draw_list_header_in_pane(WINDOW *win, const ListColumnWidths *col_widths, int pane_start_y, int pane_start_x, int pane_content_width);
+void draw_list_item_in_pane(WINDOW *win, int y_on_screen, const ClientListItem *item, const ListColumnWidths *col_widths, bool highlighted, int pane_start_x, int pane_content_width);
+void draw_client_details_in_pane(WINDOW *win, const Client *client, int pane_start_y, int pane_start_x, int pane_content_width);
+void wclr_pane_line(WINDOW *win, int y, int x, int width);
 
 
-// Other utility function declarations.
-void execute_gextux_crm();              // Executes the main GexTuX CRM program.
+// Other
+void execute_gextux_crm();
 
-// Callback function declarations (used with SQLite).
-int fetch_list_items_callback(void *data, int argc, char **argv, char **azColName); // SQLite callback for fetching client list items.
+// Callbacks
+int fetch_list_items_callback(void *data, int argc, char **argv, char **azColName);
 
-// --- Color Pair Definitions --- (Symbolic names for ncurses color pairs)
-#define COLOR_PAIR_DEFAULT 1        // Default color pair for general text.
-#define COLOR_PAIR_ERROR 2          // Color pair for error messages.
-#define COLOR_PAIR_HIGHLIGHT 3      // Color pair for highlighted items (e.g., selected menu option).
-#define COLOR_PAIR_STATUS_BG 4      // Color pair for the status bar background.
-#define COLOR_PAIR_STATUS_TEXT 5    // Color pair for text on the status bar.
-#define COLOR_PAIR_LOADING 6        // Color pair for the loading indicator text.
-#define COLOR_PAIR_INPUT_CURRENT 7  // Color pair for displaying current values in input prompts.
-#define COLOR_PAIR_PANE_SEPARATOR 8 // Color pair for the visual separator between panes.
-#define COLOR_PAIR_LIST_HEADER 9    // Color pair for the header row in list views.
-
+// --- Color Pair Definitions ---
+#define COLOR_PAIR_DEFAULT 1
+#define COLOR_PAIR_ERROR 2
+#define COLOR_PAIR_HIGHLIGHT 3        // For selected list item (Black on Yellow)
+#define COLOR_PAIR_STATUS_BG 4
+#define COLOR_PAIR_STATUS_TEXT 5
+#define COLOR_PAIR_LOADING 6
+#define COLOR_PAIR_INPUT_CURRENT 7    // Green FG, Black BG. Used for details pane.
+#define COLOR_PAIR_PANE_SEPARATOR 8
+#define COLOR_PAIR_LIST_HEADER 9      // For list header (e.g., Black on Amber/Cyan)
 
 // --- Signal Handlers ---
 void handle_resize(int sig) {
-    (void)sig;
+    (void)sig; // Unused parameter
     resize_pending = 1;
 }
 
 void handle_exit_signal(int sig) {
-    (void)sig;
+    (void)sig; // Unused parameter
     exit_requested = 1;
 }
 
 // --- Ncurses Initialization and Cleanup ---
-void draw_custom_box(WINDOW *win) {
-    cchar_t ls, rs, ts, bs, tl, tr, bl, br;
-
-    setcchar(&ls, (const wchar_t[]){WC_RF_VLINE, L'\0'}, A_NORMAL, 0, NULL);
-    setcchar(&rs, (const wchar_t[]){WC_RF_VLINE, L'\0'}, A_NORMAL, 0, NULL);
-    setcchar(&ts, (const wchar_t[]){WC_RF_HLINE, L'\0'}, A_NORMAL, 0, NULL);
-    setcchar(&bs, (const wchar_t[]){WC_RF_HLINE, L'\0'}, A_NORMAL, 0, NULL);
-    setcchar(&tl, (const wchar_t[]){WC_RF_ULCORNER, L'\0'}, A_NORMAL, 0, NULL);
-    setcchar(&tr, (const wchar_t[]){WC_RF_URCORNER, L'\0'}, A_NORMAL, 0, NULL);
-    setcchar(&bl, (const wchar_t[]){WC_RF_LLCORNER, L'\0'}, A_NORMAL, 0, NULL);
-    setcchar(&br, (const wchar_t[]){WC_RF_LRCORNER, L'\0'}, A_NORMAL, 0, NULL);
-
-    wborder_set(win, &ls, &rs, &ts, &bs, &tl, &tr, &bl, &br);
-}
-
 void check_and_handle_resize() {
     if (resize_pending) {
         resize_pending = 0;
         endwin();
-        refresh();
-        clear();
+        refresh(); // Important to refresh stdscr after endwin
+        clear();   // Clear stdscr
         getmaxyx(stdscr, max_y, max_x);
-        destroy_windows();
-        create_windows();
-        clear();
-        refresh();
+        destroy_windows(); // Destroy old windows
+        create_windows();  // Recreate windows with new dimensions
+        // The active screen's main loop should handle redrawing its content
+        clear();    // Clear stdscr again before active screen redraws
+        refresh();  // Refresh stdscr
     }
 }
 
 void init_ncurses() {
+    // Set locale to the user's environment default.
+    // This is crucial for ncurses (especially ncursesw) to correctly handle
+    // non-ASCII (e.g., UTF-8) characters for input and output.
+    // It should be called before initscr().
     if (setlocale(LC_ALL, "") == NULL) {
-        // Log error
+        // Optional: Log an error if locale cannot be set.
     }
-    mbtowc(NULL, NULL, 0);
-
 
     initscr();
     cbreak();
     noecho();
-    keypad(stdscr, TRUE);
-    curs_set(0);
+    keypad(stdscr, TRUE); // Enable function keys, arrow keys, etc.
+    curs_set(0);          // Make cursor invisible
 
     if (has_colors()) {
         start_color();
+        // Define color pairs
         init_pair(COLOR_PAIR_DEFAULT, COLOR_YELLOW, COLOR_BLACK);
         init_pair(COLOR_PAIR_ERROR, COLOR_RED, COLOR_BLACK);
-        init_pair(COLOR_PAIR_HIGHLIGHT, COLOR_BLACK, COLOR_YELLOW);
+        init_pair(COLOR_PAIR_HIGHLIGHT, COLOR_BLACK, COLOR_YELLOW); // For selected list item
         init_pair(COLOR_PAIR_STATUS_BG, COLOR_BLACK, COLOR_YELLOW);
         init_pair(COLOR_PAIR_STATUS_TEXT, COLOR_WHITE, COLOR_YELLOW);
         init_pair(COLOR_PAIR_LOADING, COLOR_CYAN, COLOR_YELLOW);
         init_pair(COLOR_PAIR_INPUT_CURRENT, COLOR_GREEN, COLOR_BLACK);
         init_pair(COLOR_PAIR_PANE_SEPARATOR, COLOR_BLUE, COLOR_BLACK);
 
+        // For List Header: Black text on Amber/Cyan background
+        // COLORS is a global variable from ncurses indicating supported colors.
         if (COLORS >= 256) {
+            // Attempt to use an "amber" color (e.g., xterm's 214 is a dark orange/gold)
             init_pair(COLOR_PAIR_LIST_HEADER, COLOR_BLACK, 214);
         } else {
+            // Fallback for terminals with < 256 colors (e.g., standard 8 or 16 color terminals)
+            // Use Black on Cyan as a distinct, non-yellow header
             init_pair(COLOR_PAIR_LIST_HEADER, COLOR_BLACK, COLOR_CYAN);
         }
     }
 
-    getmaxyx(stdscr, max_y, max_x);
-    create_windows();
-    clear();
-    refresh();
+    getmaxyx(stdscr, max_y, max_x); // Get screen dimensions
+    create_windows(); // Create application windows
+    clear();    // Clear stdscr
+    refresh();  // Refresh stdscr
 
+    // Setup signal handlers
     signal(SIGWINCH, handle_resize);
-    signal(SIGINT, handle_exit_signal);
-    signal(SIGTERM, handle_exit_signal);
+    signal(SIGINT, handle_exit_signal);  // Ctrl+C
+    signal(SIGTERM, handle_exit_signal); // Termination signal
 }
 
 void cleanup_ncurses() {
     destroy_windows();
-    curs_set(1);
-    endwin();
+    curs_set(1); // Make cursor visible again
+    endwin();    // Restore terminal to normal mode
 }
 
 void create_windows() {
+    // Main content window
     main_win = newwin(max_y - INPUT_WIN_HEIGHT - 1, max_x, 0, 0);
+    box(main_win, 0, 0);
     if (has_colors()) wbkgd(main_win, COLOR_PAIR(COLOR_PAIR_DEFAULT));
-    else wbkgd(main_win, A_NORMAL);
-    draw_custom_box(main_win);
-    scrollok(main_win, TRUE);
-    keypad(main_win, TRUE);
+    else wbkgd(main_win, A_NORMAL); // Ensure some background for non-color terminals
+    scrollok(main_win, TRUE); // Allow scrolling
+    keypad(main_win, TRUE);   // Enable keypad for this window
 
+    // Input window (usually for single line input)
     input_win = newwin(INPUT_WIN_HEIGHT, max_x, max_y - INPUT_WIN_HEIGHT - 1, 0);
+    box(input_win, 0, 0);
     if (has_colors()) wbkgd(input_win, COLOR_PAIR(COLOR_PAIR_DEFAULT));
     else wbkgd(input_win, A_NORMAL);
-    draw_custom_box(input_win);
     keypad(input_win, TRUE);
 
+    // Status bar window
     status_win = newwin(1, max_x, max_y - 1, 0);
     if (has_colors()) {
         wbkgd(status_win, COLOR_PAIR(COLOR_PAIR_STATUS_BG));
         wattron(status_win, COLOR_PAIR(COLOR_PAIR_STATUS_TEXT) | A_BOLD);
     } else {
-        wbkgd(status_win, A_REVERSE);
+        wbkgd(status_win, A_REVERSE); // Fallback for no colors
         wattron(status_win, A_BOLD);
     }
-    clear_status();
+    mvwprintw(status_win, 0, 1, "%s", STATUS_BAR_TITLE); // Use defined title
+    update_status_bar_datetime(); // Add current time
 
+    // Refresh all windows
     wrefresh(main_win);
     wrefresh(input_win);
     wrefresh(status_win);
@@ -355,36 +329,35 @@ void destroy_windows() {
 
 // --- Status Bar ---
 void update_status_bar_datetime() {
-    if (!status_win) return;
-
-    int wrapped_time_visual_len = RF_STATUS_TIME_LEFT_VISUAL_LEN + DATETIME_STR_LEN + RF_STATUS_TIME_RIGHT_VISUAL_LEN;
-    if (max_x < wrapped_time_visual_len + 2) return;
-
-    char time_buf[DATETIME_STR_LEN + 1];
+    if (!status_win || max_x < DATETIME_STR_LEN + 2) return; // Not enough space
+    char time_buf[DATETIME_STR_LEN];
     time_t now = time(NULL);
     struct tm *t = localtime(&now);
-    if (t == NULL) return;
+    if (t == NULL) return; // Should not happen
     strftime(time_buf, sizeof(time_buf), DATETIME_FORMAT, t);
 
-    int time_x = max_x - wrapped_time_visual_len -1;
+    int time_x = max_x - DATETIME_STR_LEN -1; // Position for time string (leave one space padding)
     if (time_x < 1) time_x = 1;
 
+    // Save current attributes and cursor position to restore later
     attr_t current_attrs; short current_pair; int current_y, current_x_ignored;
     wattr_get(status_win, &current_attrs, &current_pair, NULL);
-    getyx(status_win, current_y, current_x_ignored);
+    getyx(status_win, current_y, current_x_ignored); // getyx is a macro
 
     if (has_colors()) wattron(status_win, COLOR_PAIR(COLOR_PAIR_STATUS_TEXT) | A_BOLD);
     else wattron(status_win, A_BOLD);
 
-    mvwprintw(status_win, 0, time_x, "%s%s%s", RF_STATUS_TIME_LEFT_STR, time_buf, RF_STATUS_TIME_RIGHT_STR);
+    mvwprintw(status_win, 0, time_x, "%s", time_buf);
 
+    // Restore attributes and cursor position
     wattr_set(status_win, current_attrs, current_pair, NULL);
-    wmove(status_win, current_y, current_x_ignored);
+    wmove(status_win, current_y, current_x_ignored); // Restore cursor
+    // No wrefresh here, assume caller will refresh or it's part of a larger update
 }
 
 void clear_status() {
     if (!status_win) return;
-    werase(status_win);
+    werase(status_win); // Clear the status window
     if (has_colors()) {
         wbkgd(status_win, COLOR_PAIR(COLOR_PAIR_STATUS_BG));
         wattron(status_win, COLOR_PAIR(COLOR_PAIR_STATUS_TEXT) | A_BOLD);
@@ -392,13 +365,10 @@ void clear_status() {
         wbkgd(status_win, A_REVERSE);
         wattron(status_win, A_BOLD);
     }
-
-    int title_text_visual_len = strlen(STATUS_BAR_TITLE);
-    int full_banner_visual_len = RF_STATUS_TITLE_LEFT_VISUAL_LEN + title_text_visual_len + RF_STATUS_TITLE_RIGHT_VISUAL_LEN;
-
-    mvwprintw(status_win, 0, 1, "%s%s%s", RF_STATUS_TITLE_LEFT_STR, STATUS_BAR_TITLE, RF_STATUS_TITLE_RIGHT_STR);
-
-    wmove(status_win, 0, 1 + full_banner_visual_len + 2);
+    mvwprintw(status_win, 0, 1, "%s", STATUS_BAR_TITLE);
+    // Calculate where the message part of the status bar starts
+    int banner_len = strlen(STATUS_BAR_TITLE);
+    wmove(status_win, 0, 1 + banner_len + 2); // Move cursor after title and some padding
     update_status_bar_datetime();
     wrefresh(status_win);
 }
@@ -407,18 +377,17 @@ void show_status(const char *fmt, ...) {
     if (!status_win) return;
     va_list args; va_start(args, fmt);
 
-    int title_text_visual_len = strlen(STATUS_BAR_TITLE);
-    int full_banner_visual_len = RF_STATUS_TITLE_LEFT_VISUAL_LEN + title_text_visual_len + RF_STATUS_TITLE_RIGHT_VISUAL_LEN;
-    int start_x = 1 + full_banner_visual_len + 2;
+    int banner_len = strlen(STATUS_BAR_TITLE);
+    int start_x = 1 + banner_len + 2; // Start message after title and padding
 
-    wmove(status_win, 0, start_x);
-    wclrtoeol(status_win);
+    wmove(status_win, 0, start_x); // Move to message start position
+    wclrtoeol(status_win);         // Clear from cursor to end of line
 
     if (has_colors()) wattron(status_win, COLOR_PAIR(COLOR_PAIR_STATUS_TEXT) | A_BOLD);
     else wattron(status_win, A_BOLD);
 
-    int wrapped_time_visual_len = RF_STATUS_TIME_LEFT_VISUAL_LEN + DATETIME_STR_LEN + RF_STATUS_TIME_RIGHT_VISUAL_LEN;
-    if (start_x < max_x - wrapped_time_visual_len - 2) {
+    // Print message if there's space before datetime
+    if (start_x < max_x - DATETIME_STR_LEN - 2) {
         vw_printw(status_win, fmt, args);
     }
 
@@ -431,24 +400,24 @@ void show_error(const char *fmt, ...) {
     if (!status_win) return;
     va_list args; va_start(args, fmt);
 
-    int title_text_visual_len = strlen(STATUS_BAR_TITLE);
-    int full_banner_visual_len = RF_STATUS_TITLE_LEFT_VISUAL_LEN + title_text_visual_len + RF_STATUS_TITLE_RIGHT_VISUAL_LEN;
-    int start_x = 1 + full_banner_visual_len + 2;
+    int banner_len = strlen(STATUS_BAR_TITLE);
+    int start_x = 1 + banner_len + 2;
 
     wmove(status_win, 0, start_x);
     wclrtoeol(status_win);
 
     if(has_colors()) wattron(status_win, COLOR_PAIR(COLOR_PAIR_ERROR) | A_BOLD | A_BLINK);
-    else wattron(status_win, A_REVERSE | A_BOLD | A_BLINK);
+    else wattron(status_win, A_REVERSE | A_BOLD | A_BLINK); // Fallback error style
 
     mvwprintw(status_win, 0, start_x, "ERROR: ");
-    int cy, cx; getyx(status_win, cy, cx);
+    int cy, cx; getyx(status_win, cy, cx); // Get current cursor position
 
-    int wrapped_time_visual_len = RF_STATUS_TIME_LEFT_VISUAL_LEN + DATETIME_STR_LEN + RF_STATUS_TIME_RIGHT_VISUAL_LEN;
-    if (cx < max_x - wrapped_time_visual_len - 2) {
+    // Print error details if space allows
+    if (cx < max_x - DATETIME_STR_LEN - 2) {
         vw_printw(status_win, fmt, args);
     }
 
+    // Reset attributes to normal status bar style
     if(has_colors()) {
         wattroff(status_win, COLOR_PAIR(COLOR_PAIR_ERROR) | A_BOLD | A_BLINK);
         wattron(status_win, COLOR_PAIR(COLOR_PAIR_STATUS_TEXT) | A_BOLD);
@@ -459,73 +428,72 @@ void show_error(const char *fmt, ...) {
 
     update_status_bar_datetime();
     wrefresh(status_win);
-    beep();
+    beep(); // Audible alert for error
 
+    // Display a "press any key" prompt in the input window if available
     if (input_win) {
         mvwprintw(input_win, INPUT_PROMPT_Y, INPUT_PROMPT_X, "Error. Press any key...");
-        draw_custom_box(input_win); wrefresh(input_win); wgetch(input_win);
-        werase(input_win); draw_custom_box(input_win); wrefresh(input_win);
+        box(input_win, 0, 0); wrefresh(input_win); wgetch(input_win);
+        werase(input_win); box(input_win, 0, 0); wrefresh(input_win);
     } else {
-        napms(2000);
+        napms(2000); // Fallback delay if input_win is not available
     }
-    clear_status();
+    clear_status(); // Clear the error message from status bar
     va_end(args);
 }
 
 void show_loading_indicator(bool show_ind) {
      if (!status_win) return;
-
-     int title_text_visual_len = strlen(STATUS_BAR_TITLE);
-     int full_banner_visual_len = RF_STATUS_TITLE_LEFT_VISUAL_LEN + title_text_visual_len + RF_STATUS_TITLE_RIGHT_VISUAL_LEN;
-     int wrapped_time_visual_len = RF_STATUS_TIME_LEFT_VISUAL_LEN + DATETIME_STR_LEN + RF_STATUS_TIME_RIGHT_VISUAL_LEN;
-
-     int indicator_x = max_x - wrapped_time_visual_len - RF_LOADING_TEXT_VISUAL_LEN - 2;
-
-     if (indicator_x <= (1 + full_banner_visual_len + 2)) indicator_x = 1 + full_banner_visual_len + 2;
-     if (indicator_x >= max_x -1 || indicator_x + RF_LOADING_TEXT_VISUAL_LEN >= max_x - wrapped_time_visual_len -1) {
-         return;
-     }
+     int banner_len = strlen(STATUS_BAR_TITLE);
+     // Position indicator before the datetime, with some padding
+     int indicator_x = max_x - DATETIME_STR_LEN - 12; // 12 for "[LOADING] " + padding
+     // Ensure indicator doesn't overwrite the main title
+     if (indicator_x <= (1 + banner_len + 2)) indicator_x = 1 + banner_len + 2;
+     if (indicator_x >= max_x -1) return; // Not enough space
 
      wmove(status_win, 0, indicator_x);
      if (show_ind) {
          if (has_colors()) wattron(status_win, COLOR_PAIR(COLOR_PAIR_LOADING) | A_BOLD);
          else wattron(status_win, A_REVERSE | A_BOLD);
-         wprintw(status_win, "%s", RF_LOADING_TEXT_STR);
+         wprintw(status_win, "[LOADING]");
+         // Reset to normal status text attributes
          if (has_colors()) wattroff(status_win, COLOR_PAIR(COLOR_PAIR_LOADING) | A_BOLD);
          else wattroff(status_win, A_REVERSE | A_BOLD);
          if (has_colors()) wattron(status_win, COLOR_PAIR(COLOR_PAIR_STATUS_TEXT) | A_BOLD);
          else wattron(status_win, A_BOLD);
-     } else {
+     } else { // Clear the loading indicator space
          if (has_colors()) wattron(status_win, COLOR_PAIR(COLOR_PAIR_STATUS_TEXT) | A_BOLD);
          else wattron(status_win, A_BOLD);
-         wprintw(status_win, "%s", RF_LOADING_CLEAR_TEXT_STR);
+         wprintw(status_win, "         "); // 9 spaces to overwrite "[LOADING]"
      }
-     update_status_bar_datetime();
+     update_status_bar_datetime(); // Redraw datetime as it might have been partially overwritten
      wrefresh(status_win);
 }
 
 // --- Database Interaction ---
 static int check_column_exists(const char *table_name, const char *column_name) {
-    if (!db) return -1;
+    if (!db) return -1; // Database not open
     char *sql = sqlite3_mprintf("PRAGMA table_info(%q);", table_name);
     if (!sql) {
         if(status_win) show_error("Memory allocation failed checking column existence.");
-        return -1;
+        return -1; // Malloc failure
     }
 
     sqlite3_stmt *stmt;
     int column_found = 0;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        // Check if error is "no such table", which is not a critical error for this check
         if (sqlite3_errcode(db) != SQLITE_ERROR || strstr(sqlite3_errmsg(db), "no such table") == NULL) {
              if(status_win) show_error("DB error checking column: %s", sqlite3_errmsg(db));
         }
         sqlite3_free(sql);
-        return 0;
+        return 0; // Treat as column not found if table doesn't exist or other prep error
     }
-    sqlite3_free(sql);
+    sqlite3_free(sql); // SQL string no longer needed
 
+    // Iterate over rows (columns of the table)
     while (sqlite3_step(stmt) == SQLITE_ROW) {
-        const unsigned char *name = sqlite3_column_text(stmt, 1);
+        const unsigned char *name = sqlite3_column_text(stmt, 1); // Column name is at index 1
         if (name && strcmp((const char*)name, column_name) == 0) {
             column_found = 1;
             break;
@@ -541,11 +509,12 @@ int init_db(const char* db_filename) {
         char err_buf[MAX_STR_LEN];
         snprintf(err_buf, sizeof(err_buf), "Can't open database '%s': %s", db_filename, sqlite3_errmsg(db));
         if (status_win) show_error("%s", err_buf); else fprintf(stderr, "%s\n", err_buf);
-        sqlite3_close(db);
+        sqlite3_close(db); // sqlite3_close can be called on a NULL pointer, but db isn't NULL here
         db = NULL;
         return 0;
     }
 
+    // SQL to create the clients table if it doesn't exist
     const char *sql_create_table =
         "CREATE TABLE IF NOT EXISTS \"clients\" ("
         "\"id\"	INTEGER,"
@@ -572,9 +541,10 @@ int init_db(const char* db_filename) {
 
     if (!db_execute(sql_create_table, NULL, NULL)) {
         if (db) { sqlite3_close(db); db = NULL; }
-        return 0;
+        return 0; // Failed to create table
     }
 
+    // Schema migration: Add columns if they don't exist (for older DBs)
     if (!check_column_exists("clients", "tax_number")) {
         if (!db_execute("ALTER TABLE clients ADD COLUMN tax_number TEXT;", NULL, NULL)) {
             // Non-fatal
@@ -585,7 +555,7 @@ int init_db(const char* db_filename) {
             // Non-fatal
         }
     }
-    return 1;
+    return 1; // Database initialized successfully
 }
 
 void close_db() {
@@ -602,12 +572,12 @@ int db_execute(const char *sql, int (*callback)(void*,int,char**,char**), void *
     }
     char *err_msg = 0;
     int rc = sqlite3_exec(db, sql, callback, data, &err_msg);
-    if (rc != SQLITE_OK && rc != SQLITE_ABORT) {
+    if (rc != SQLITE_OK && rc != SQLITE_ABORT) { // SQLITE_ABORT means callback requested stop
         if(status_win) show_error("SQL error: %s (Query: %.50s...)", err_msg, sql);
         sqlite3_free(err_msg);
         return 0;
     }
-    sqlite3_free(err_msg);
+    sqlite3_free(err_msg); // Free error message if one was allocated
     return 1;
 }
 
@@ -633,9 +603,9 @@ int fetch_client_by_id(int id, Client *client) {
     sqlite3_bind_int(stmt, 1, id);
     rc = sqlite3_step(stmt);
 
-    if (rc == SQLITE_ROW) {
+    if (rc == SQLITE_ROW) { // Row found
         found = 1;
-        memset(client, 0, sizeof(Client));
+        memset(client, 0, sizeof(Client)); // Initialize client struct
         client->id = sqlite3_column_int(stmt, 0);
 
         const unsigned char *text_val;
@@ -787,24 +757,19 @@ int get_string_input(WINDOW *win, int y, int x, const char *prompt, char *buffer
     char temp_buffer[max_len];
     temp_buffer[0] = '\0';
 
-    werase(win); draw_custom_box(win);
+    werase(win); box(win, 0, 0);
     curs_set(1);
     echo();
 
     wmove(win, y, x);
-    int prompt_text_visual_len = RF_INPUT_PROMPT_VISUAL_LEN + strlen(prompt) + 1;
-
-    wprintw(win, "%s%s ", RF_INPUT_PROMPT_STR, prompt);
+    wprintw(win, "%s ", prompt);
     if (current_value_display && strlen(current_value_display) > 0) {
         if(has_colors()) wattron(win, COLOR_PAIR(COLOR_PAIR_INPUT_CURRENT));
-
-        int available_for_current = getmaxx(win) - x - prompt_text_visual_len - 3 - 2;
+        int prompt_len = strlen(prompt) + 1;
+        int available_for_current = getmaxx(win) - x - prompt_len - 5;
         if (available_for_current < 3) available_for_current = 3;
-
-        wprintw(win, "[%.*s%s]",
-                available_for_current - (strlen(current_value_display) > (size_t)available_for_current ? 2:0),
-                current_value_display,
-                strlen(current_value_display) > (size_t)available_for_current ? ".." : "");
+        wprintw(win, "[%.*s%s]", available_for_current - (strlen(current_value_display) > (size_t)available_for_current-2 ? 2:0),
+                current_value_display, strlen(current_value_display) > (size_t)available_for_current-2 ? ".." : "");
 
         if(has_colors()) wattroff(win, COLOR_PAIR(COLOR_PAIR_INPUT_CURRENT));
     }
@@ -815,7 +780,7 @@ int get_string_input(WINDOW *win, int y, int x, const char *prompt, char *buffer
 
     noecho();
     curs_set(0);
-    werase(win); draw_custom_box(win); wrefresh(win);
+    werase(win); box(win, 0, 0); wrefresh(win);
 
     temp_buffer[strcspn(temp_buffer, "\r\n")] = 0;
 
@@ -900,7 +865,7 @@ int select_client_status(char *selected_status, const char *current_status) {
         check_and_handle_resize();
         if (!input_win) return -1;
 
-        werase(input_win); draw_custom_box(input_win);
+        werase(input_win); box(input_win, 0, 0);
         mvwprintw(input_win, 0, 1, "Select Status (Current: %s). Arrows, Enter, ESC.", current_status ? current_status : "N/A");
 
         int current_x_pos = 1;
@@ -912,7 +877,7 @@ int select_client_status(char *selected_status, const char *current_status) {
             if (i == choice) {
                 wattroff(input_win, has_colors() ? COLOR_PAIR(COLOR_PAIR_HIGHLIGHT) : A_REVERSE);
             }
-            current_x_pos += strlen(statuses[i]) + 3;
+            current_x_pos += strlen(statuses[i]) + 3; // +2 for surrounding spaces, +1 for spacing to next item
         }
         wrefresh(input_win);
 
@@ -923,22 +888,22 @@ int select_client_status(char *selected_status, const char *current_status) {
             case KEY_NAV_RIGHT: choice = (choice + 1) % n_statuses; break;
             case KEY_ACTION_SELECT:
             case KEY_ACTION_ENTER:
-                werase(input_win); draw_custom_box(input_win); wrefresh(input_win);
-                if (choice == n_statuses - 1) {
+                werase(input_win); box(input_win, 0, 0); wrefresh(input_win);
+                if (choice == n_statuses - 1) { // "(Cancel)" selected
                     if (current_status) strncpy(selected_status, current_status, MAX_STR_LEN -1);
-                    else strcpy(selected_status, "Active");
+                    else strcpy(selected_status, "Active"); // Default if no current status
                     selected_status[MAX_STR_LEN-1] = '\0';
-                    return -1;
+                    return -1; // Indicate cancellation or no change
                 }
                 strncpy(selected_status, statuses[choice], MAX_STR_LEN - 1);
                 selected_status[MAX_STR_LEN - 1] = '\0';
-                return 1;
+                return 1; // Indicate successful selection
             case KEY_ESC:
-                werase(input_win); draw_custom_box(input_win); wrefresh(input_win);
+                werase(input_win); box(input_win, 0, 0); wrefresh(input_win);
                 if (current_status) strncpy(selected_status, current_status, MAX_STR_LEN -1);
-                else strcpy(selected_status, "Active");
+                else strcpy(selected_status, "Active"); // Default if no current status
                 selected_status[MAX_STR_LEN-1] = '\0';
-                return -1;
+                return -1; // Indicate cancellation
         }
     }
 }
@@ -956,10 +921,6 @@ void display_editor_main_menu() {
     int choice = 0;
     int key;
 
-    cchar_t title_sep_char;
-    setcchar(&title_sep_char, (const wchar_t[]){WC_RF_TITLE_SEP_CHAR, L'\0'}, A_NORMAL, 0, NULL);
-
-
     while (!exit_requested) {
         check_and_handle_resize();
         if (!main_win || !input_win || !status_win) {
@@ -968,7 +929,8 @@ void display_editor_main_menu() {
             if(!main_win) continue;
         }
 
-        werase(main_win); draw_custom_box(main_win);
+        clear_status();
+        werase(main_win); box(main_win, 0, 0);
 
         const char *menu_title = "GEXTUX CUSTOMER MANAGEMENT";
         mvwprintw(main_win, SCREEN_TITLE_Y, (getmaxx(main_win) - strlen(menu_title)) / 2, "%s", menu_title);
@@ -976,37 +938,34 @@ void display_editor_main_menu() {
         int sep_len = strlen(menu_title);
         if (sep_len < MIN_SEPARATOR_WIDTH) sep_len = MIN_SEPARATOR_WIDTH;
         int max_sep_len = getmaxx(main_win) - (2 * MAIN_WIN_BORDER_WIDTH);
-        if (max_sep_len < 0) max_sep_len = 0;
+        if (max_sep_len < 0) max_sep_len = 0; // Ensure not negative
         if (sep_len > max_sep_len) sep_len = max_sep_len;
 
         if (sep_len > 0) {
             int sep_x = (getmaxx(main_win) - sep_len) / 2;
             wmove(main_win, SCREEN_SEPARATOR_Y, sep_x);
-            for (int k = 0; k < sep_len; ++k) wadd_wch(main_win, &title_sep_char);
+            for (int k = 0; k < sep_len; ++k) waddch(main_win, ACS_HLINE);
         }
 
         for (int i = 0; i < n_options; ++i) {
             int y_pos = SCREEN_CONTENT_Y_MENU + i;
-            if (y_pos >= getmaxy(main_win) - 1 -1) break;
+            if (y_pos >= getmaxy(main_win) - 1 -1) break; // -1 for box, -1 for instruction line
             if (i == choice) {
                 wattron(main_win, has_colors() ? COLOR_PAIR(COLOR_PAIR_HIGHLIGHT) : A_REVERSE);
-                mvwprintw(main_win, y_pos, MENU_INDENT, "%s%s", RF_MENU_SELECTOR_STR, options[i]);
+                mvwprintw(main_win, y_pos, MENU_INDENT, "> %s", options[i]);
                 wattroff(main_win, has_colors() ? COLOR_PAIR(COLOR_PAIR_HIGHLIGHT) : A_REVERSE);
             } else {
-                char padding[RF_MENU_SELECTOR_VISUAL_LEN + 1];
-                memset(padding, ' ', RF_MENU_SELECTOR_VISUAL_LEN);
-                padding[RF_MENU_SELECTOR_VISUAL_LEN] = '\0';
-                mvwprintw(main_win, y_pos, MENU_INDENT, "%s%s", padding, options[i]);
+                mvwprintw(main_win, y_pos, MENU_INDENT, "  %s", options[i]);
             }
         }
         mvwprintw(main_win, getmaxy(main_win) - 2, MAIN_WIN_BORDER_WIDTH, "Use UP/DOWN, ENTER, Number, or Q.");
         wrefresh(main_win);
 
-        werase(input_win); draw_custom_box(input_win); wrefresh(input_win);
-        clear_status();
+        werase(input_win); box(input_win, 0, 0); wrefresh(input_win);
 
         key = wgetch(main_win);
         if (key == ERR && !exit_requested) { continue; }
+        clear_status();
 
         switch (key) {
             case KEY_NAV_UP: choice = (choice - 1 + n_options) % n_options; break;
@@ -1014,14 +973,14 @@ void display_editor_main_menu() {
             case KEY_ACTION_SELECT:
             case KEY_ACTION_ENTER:
                 if (choice == 0) add_new_customer_screen();
-                else if (choice == 1) customer_search_workflow("EDIT CUSTOMER SEARCH", "Enter ID or part of Name, Contact, Email, City.", INTERACTIVE_LIST_ACTION_EDIT);
-                else if (choice == 2) customer_search_workflow("DELETE CUSTOMER SEARCH", "Enter ID or part of Name, Contact, Email, City.", INTERACTIVE_LIST_ACTION_DELETE);
+                else if (choice == 1) customer_search_workflow("- Edit Customer: Search -", "Enter ID or part of Name, Contact, Email, City.", INTERACTIVE_LIST_ACTION_EDIT);
+                else if (choice == 2) customer_search_workflow("- Delete Customer: Search -", "Enter ID or part of Name, Contact, Email, City.", INTERACTIVE_LIST_ACTION_DELETE);
                 else if (choice == 3) { execute_gextux_crm(); return; }
                 else if (choice == 4) exit_requested = 1;
                 break;
             case '1': add_new_customer_screen(); break;
-            case '2': customer_search_workflow("EDIT CUSTOMER SEARCH", "Enter ID or part of Name, Contact, Email, City.", INTERACTIVE_LIST_ACTION_EDIT); break;
-            case '3': customer_search_workflow("DELETE CUSTOMER SEARCH", "Enter ID or part of Name, Contact, Email, City.", INTERACTIVE_LIST_ACTION_DELETE); break;
+            case '2': customer_search_workflow("- Edit Customer: Search -", "Enter ID or part of Name, Contact, Email, City.", INTERACTIVE_LIST_ACTION_EDIT); break;
+            case '3': customer_search_workflow("- Delete Customer: Search -", "Enter ID or part of Name, Contact, Email, City.", INTERACTIVE_LIST_ACTION_DELETE); break;
             case '4': execute_gextux_crm(); return;
             case KEY_ACTION_QUIT:
             case KEY_ACTION_QUIT_ALT:
@@ -1044,11 +1003,8 @@ void add_new_customer_screen() {
     memset(&new_client, 0, sizeof(Client));
     strcpy(new_client.status, "Active");
 
-    cchar_t title_sep_char;
-    setcchar(&title_sep_char, (const wchar_t[]){WC_RF_TITLE_SEP_CHAR, L'\0'}, A_NORMAL, 0, NULL);
-
-    werase(main_win); draw_custom_box(main_win);
-    const char *form_title_text = "ADD NEW CUSTOMER";
+    werase(main_win); box(main_win, 0, 0);
+    const char *form_title_text = "--- Add New Customer ---";
     mvwprintw(main_win, SCREEN_TITLE_Y, (getmaxx(main_win) - strlen(form_title_text)) / 2, "%s", form_title_text);
 
     int sep_len = strlen(form_title_text);
@@ -1060,7 +1016,7 @@ void add_new_customer_screen() {
     if (sep_len > 0) {
         int sep_x = (getmaxx(main_win) - sep_len) / 2;
         wmove(main_win, SCREEN_SEPARATOR_Y, sep_x);
-        for (int k = 0; k < sep_len; ++k) wadd_wch(main_win, &title_sep_char);
+        for (int k = 0; k < sep_len; ++k) waddch(main_win, ACS_HLINE);
     }
 
     mvwprintw(main_win, SCREEN_CONTENT_Y_STD, MAIN_WIN_BORDER_WIDTH, "ESC cancels field, type '%s' and Enter to abort all.", CANCEL_INPUT_STRING);
@@ -1105,11 +1061,11 @@ void add_new_customer_screen() {
     GET_STR_FIELD("Notes", notes, MAX_NOTES_LEN, true, NULL);
     #undef GET_STR_FIELD
 
-    werase(input_win); draw_custom_box(input_win);
+    werase(input_win); box(input_win,0,0);
     mvwprintw(input_win, INPUT_PROMPT_Y, INPUT_PROMPT_X, "Save new customer '%s'? (Y/N): ", new_client.business_name);
     wrefresh(input_win);
     int confirm_key = wgetch(input_win);
-    werase(input_win); draw_custom_box(input_win); wrefresh(input_win);
+    werase(input_win); box(input_win,0,0); wrefresh(input_win);
 
     if (toupper(confirm_key) == 'Y') {
         show_loading_indicator(true);
@@ -1125,10 +1081,7 @@ void customer_search_workflow(const char *screen_title, const char *search_promp
     char search_term[MAX_STR_LEN];
     char *sql_query = NULL;
 
-    cchar_t title_sep_char;
-    setcchar(&title_sep_char, (const wchar_t[]){WC_RF_TITLE_SEP_CHAR, L'\0'}, A_NORMAL, 0, NULL);
-
-    werase(main_win); draw_custom_box(main_win);
+    werase(main_win); box(main_win, 0, 0);
     mvwprintw(main_win, SCREEN_TITLE_Y, (getmaxx(main_win) - strlen(screen_title)) / 2, "%s", screen_title);
 
     int sep_len = strlen(screen_title);
@@ -1140,7 +1093,7 @@ void customer_search_workflow(const char *screen_title, const char *search_promp
     if (sep_len > 0) {
         int sep_x = (getmaxx(main_win) - sep_len) / 2;
         wmove(main_win, SCREEN_SEPARATOR_Y, sep_x);
-        for (int k = 0; k < sep_len; ++k) wadd_wch(main_win, &title_sep_char);
+        for (int k = 0; k < sep_len; ++k) waddch(main_win, ACS_HLINE);
     }
 
     mvwprintw(main_win, SCREEN_CONTENT_Y_STD, MAIN_WIN_BORDER_WIDTH, "%s", search_prompt_detail);
@@ -1184,16 +1137,13 @@ void customer_search_workflow(const char *screen_title, const char *search_promp
 void edit_customer_form_screen(int client_id) {
     Client client, original_client;
 
-    cchar_t title_sep_char;
-    setcchar(&title_sep_char, (const wchar_t[]){WC_RF_TITLE_SEP_CHAR, L'\0'}, A_NORMAL, 0, NULL);
-
     if (!fetch_client_by_id(client_id, &client)) {
         show_error("Could not fetch details for customer ID %d to edit.", client_id);
         return;
     }
     original_client = client;
 
-    werase(main_win); draw_custom_box(main_win);
+    werase(main_win); box(main_win, 0, 0);
     char form_title_text[MAX_STR_LEN + 50];
     snprintf(form_title_text, sizeof(form_title_text), "--- Edit Customer: %s (ID: %d) ---", client.business_name, client.id);
     mvwprintw(main_win, SCREEN_TITLE_Y, (getmaxx(main_win) - strlen(form_title_text)) / 2, "%s", form_title_text);
@@ -1207,7 +1157,7 @@ void edit_customer_form_screen(int client_id) {
     if (sep_len > 0) {
         int sep_x = (getmaxx(main_win) - sep_len) / 2;
         wmove(main_win, SCREEN_SEPARATOR_Y, sep_x);
-        for (int k = 0; k < sep_len; ++k) wadd_wch(main_win, &title_sep_char);
+        for (int k = 0; k < sep_len; ++k) waddch(main_win, ACS_HLINE);
     }
 
     mvwprintw(main_win, SCREEN_CONTENT_Y_STD, MAIN_WIN_BORDER_WIDTH, "Enter to keep current, ESC cancels field, type '%s' and Enter to abort all.", CANCEL_INPUT_STRING);
@@ -1252,11 +1202,11 @@ void edit_customer_form_screen(int client_id) {
     EDIT_STR_FIELD("Notes", notes, MAX_NOTES_LEN, true);
     #undef EDIT_STR_FIELD
 
-    werase(input_win); draw_custom_box(input_win);
+    werase(input_win); box(input_win,0,0);
     mvwprintw(input_win, INPUT_PROMPT_Y, INPUT_PROMPT_X, "Save changes to '%s'? (Y/N): ", client.business_name);
     wrefresh(input_win);
     int confirm_key = wgetch(input_win);
-    werase(input_win); draw_custom_box(input_win); wrefresh(input_win);
+    werase(input_win); box(input_win,0,0); wrefresh(input_win);
 
     if (toupper(confirm_key) == 'Y') {
         show_loading_indicator(true);
@@ -1306,19 +1256,22 @@ void draw_list_header_in_pane(WINDOW *win, const ListColumnWidths *col_widths, i
     if (has_colors()) {
         wattron(win, COLOR_PAIR(COLOR_PAIR_LIST_HEADER) | A_BOLD);
     } else {
-        wattron(win, A_BOLD | A_REVERSE);
+        wattron(win, A_BOLD | A_REVERSE);   // Fallback for no colors
     }
 
+    // Clear the header line (this will use the new header color pair for background)
     wmove(win, pane_start_y, pane_start_x);
     for(int i = 0; i < pane_content_width; ++i) {
         if (pane_start_x + i >= getmaxx(win)) break;
         waddch(win, ' ');
     }
-    wmove(win, pane_start_y, pane_start_x);
+    wmove(win, pane_start_y, pane_start_x); // Reset cursor
 
+    // Draw ID header
     if (col_widths->id_width > 0) {
         mvwprintw(win, pane_start_y, pane_start_x, "%-*.*s", col_widths->id_width, col_widths->id_width, "ID");
     }
+    // Draw Business Name header
     if (col_widths->name_width > 0) {
         if (pane_start_x + col_widths->name_col_start < pane_start_x + pane_content_width) {
              mvwprintw(win, pane_start_y, pane_start_x + col_widths->name_col_start, "%-*.*s", col_widths->name_width, col_widths->name_width, "Business Name");
@@ -1416,45 +1369,15 @@ void draw_client_details_in_pane(WINDOW *win, const Client *client, int pane_sta
         int notes_available_width = pane_content_width - 2;
         if (notes_available_width < 1) notes_available_width = 1;
 
-
         while (*notes_ptr && y < getmaxy(win) - (MAIN_WIN_BORDER_WIDTH -1)) {
             wmove(win, y, notes_text_start_x);
-            int bytes_to_print_this_line = 0;
-            int current_visual_width = 0;
-            const char* line_start_ptr = notes_ptr;
-
-            const char* temp_ptr = notes_ptr;
-            while (*temp_ptr && *temp_ptr != '\n') {
-                wchar_t wch;
-                int mb_len = mbtowc(&wch, temp_ptr, MB_CUR_MAX);
-
-                if (mb_len <= 0) {
-                    if (mb_len < 0) {
-                        bytes_to_print_this_line++; temp_ptr++;
-                    }
-                    break;
-                }
-
-                int char_width = wcwidth(wch); // wcwidth warning might still appear if not resolved by macro
-                if (char_width < 0) char_width = 1;
-
-                if (current_visual_width + char_width > notes_available_width) {
-                    break;
-                }
-                current_visual_width += char_width;
-                bytes_to_print_this_line += mb_len;
-                temp_ptr += mb_len;
+            int k = 0;
+            for (k = 0; k < notes_available_width && notes_ptr[k] && notes_ptr[k] != '\n'; ++k) {
+                waddch(win, notes_ptr[k]);
             }
-
-            if (bytes_to_print_this_line > 0) {
-                waddnstr(win, line_start_ptr, bytes_to_print_this_line);
-            }
-
             y++;
-            notes_ptr += bytes_to_print_this_line;
-            if (*notes_ptr == '\n') {
-                notes_ptr++;
-            }
+            notes_ptr += k;
+            if (*notes_ptr == '\n') notes_ptr++;
         }
     }
     #undef PRINT_PANE_DETAIL
@@ -1471,19 +1394,13 @@ void display_interactive_client_list(const char *title, const char *sql_query, I
     ClientListItem *items = NULL; int total_items = 0, capacity = 0;
     FetchListData list_data = { &items, &total_items, &capacity };
 
-    cchar_t title_sep_char;
-    setcchar(&title_sep_char, (const wchar_t[]){WC_RF_TITLE_SEP_CHAR, L'\0'}, A_NORMAL, 0, NULL);
-    cchar_t pane_sep_char;
-    setcchar(&pane_sep_char, (const wchar_t[]){WC_RF_PANE_VSEP, L'\0'}, A_NORMAL, 0, NULL);
-
-
     show_loading_indicator(true); show_status("Searching customers...");
     bool fetch_success = db_execute(sql_query, fetch_list_items_callback, &list_data);
     show_loading_indicator(false); clear_status();
 
     if (!fetch_success) { free(items); return; }
     if (total_items == 0) {
-        werase(main_win); draw_custom_box(main_win);
+        werase(main_win); box(main_win, 0, 0);
         mvwprintw(main_win, SCREEN_TITLE_Y, (getmaxx(main_win) - strlen(title)) / 2, "%s", title);
 
         int sep_len = strlen(title);
@@ -1495,13 +1412,13 @@ void display_interactive_client_list(const char *title, const char *sql_query, I
         if (sep_len > 0) {
             int sep_x = (getmaxx(main_win) - sep_len) / 2;
             wmove(main_win, SCREEN_SEPARATOR_Y, sep_x);
-            for (int k = 0; k < sep_len; ++k) wadd_wch(main_win, &title_sep_char);
+            for (int k = 0; k < sep_len; ++k) waddch(main_win, ACS_HLINE);
         }
 
         mvwprintw(main_win, SCREEN_CONTENT_Y_MENU, MENU_INDENT, "No customers found matching your search criteria.");
         wrefresh(main_win);
 
-        werase(input_win); draw_custom_box(input_win);
+        werase(input_win); box(input_win, 0, 0);
         mvwprintw(input_win, 1, 1, "Press any key to return...");
         wrefresh(input_win);
 
@@ -1519,9 +1436,10 @@ void display_interactive_client_list(const char *title, const char *sql_query, I
     ListColumnWidths list_col_widths;
     int main_win_height, main_win_width;
 
-    int title_bar_h = (SCREEN_SEPARATOR_Y - SCREEN_TITLE_Y) + 1;
+    // title_bar_h includes title line + separator line
+    int title_bar_h = (SCREEN_SEPARATOR_Y - SCREEN_TITLE_Y) + 1; // Should be 2
     int list_header_h = 1;
-    int instruction_h = 0;
+    int instruction_h = 0; // Instructions are in input_win
 
     while (!exit_requested) {
         check_and_handle_resize();
@@ -1533,10 +1451,15 @@ void display_interactive_client_list(const char *title, const char *sql_query, I
         main_win_height = getmaxy(main_win);
         main_win_width = getmaxx(main_win);
 
-        int content_below_separator_y = SCREEN_SEPARATOR_Y + 1;
-        int list_items_start_y = content_below_separator_y + list_header_h;
+        // SCREEN_TITLE_Y is where title is drawn
+        // SCREEN_SEPARATOR_Y is where separator is drawn
+        // Content starts below separator
+        int content_below_separator_y = SCREEN_SEPARATOR_Y + 1; // This is SCREEN_CONTENT_Y_STD
+        int list_items_start_y = content_below_separator_y + list_header_h; // This is SCREEN_CONTENT_Y_MENU
 
-        int list_pane_content_height = main_win_height - (2 * (MAIN_WIN_BORDER_WIDTH-1))
+        // Height available for list pane content (header + items)
+        // Total height - box borders - title area - instruction area (if any in main_win)
+        int list_pane_content_height = main_win_height - (2 * (MAIN_WIN_BORDER_WIDTH-1)) // Box lines (top/bottom)
                                      - title_bar_h;
         if (list_pane_content_height < 1) list_pane_content_height = 1;
 
@@ -1556,10 +1479,10 @@ void display_interactive_client_list(const char *title, const char *sql_query, I
         if (detail_pane_w < 0) detail_pane_w = 0;
 
         int list_pane_start_x = MAIN_WIN_BORDER_WIDTH;
-        int separator_x_pane = list_pane_start_x + list_pane_w;
+        int separator_x_pane = list_pane_start_x + list_pane_w; // Renamed from separator_x to avoid conflict
         int detail_pane_start_x = separator_x_pane + PANE_SEPARATOR_WIDTH;
 
-        werase(main_win); draw_custom_box(main_win);
+        werase(main_win); box(main_win, 0, 0);
         mvwprintw(main_win, SCREEN_TITLE_Y, (main_win_width - strlen(title)) / 2, "%s", title);
 
         int sep_len = strlen(title);
@@ -1569,15 +1492,16 @@ void display_interactive_client_list(const char *title, const char *sql_query, I
         if (sep_len > max_sep_len) sep_len = max_sep_len;
 
         if (sep_len > 0) {
-            int sep_x_title = (main_win_width - sep_len) / 2;
+            int sep_x_title = (main_win_width - sep_len) / 2; // Renamed from sep_x
             wmove(main_win, SCREEN_SEPARATOR_Y, sep_x_title);
-            for (int k = 0; k < sep_len; ++k) wadd_wch(main_win, &title_sep_char);
+            for (int k = 0; k < sep_len; ++k) waddch(main_win, ACS_HLINE);
         }
 
         if (PANE_SEPARATOR_WIDTH > 0 && list_pane_w > 0 && detail_pane_w > 0) {
             if(has_colors()) wattron(main_win, COLOR_PAIR(COLOR_PAIR_PANE_SEPARATOR));
+            // Draw separator from content_below_separator_y down to bottom of content area
             for (int i = content_below_separator_y; i < main_win_height - (MAIN_WIN_BORDER_WIDTH -1) - instruction_h; ++i) {
-                mvwadd_wch(main_win, i, separator_x_pane, &pane_sep_char);
+                mvwaddch(main_win, i, separator_x_pane, ACS_VLINE);
             }
             if(has_colors()) wattroff(main_win, COLOR_PAIR(COLOR_PAIR_PANE_SEPARATOR));
         }
@@ -1595,10 +1519,11 @@ void display_interactive_client_list(const char *title, const char *sql_query, I
 
             for (int i = top_item_index; i <= last_visible_on_page; ++i) {
                 int screen_y = list_items_start_y + (i - top_item_index);
+                // Ensure drawing within the allocated space for items
                 if (screen_y >= content_below_separator_y + list_pane_content_height) break;
                 draw_list_item_in_pane(main_win, screen_y, &items[i], &list_col_widths, (i == selected_item_index), list_pane_start_x, list_pane_w);
             }
-        } else if (list_pane_w > 0 && total_items == 0) {
+        } else if (list_pane_w > 0 && total_items == 0) { // Should have been handled by "No customers found"
              calculate_list_column_widths_for_pane(&list_col_widths, list_pane_w);
              draw_list_header_in_pane(main_win, &list_col_widths, content_below_separator_y, list_pane_start_x, list_pane_w);
              if (list_items_start_y < content_below_separator_y + list_pane_content_height) {
@@ -1628,7 +1553,7 @@ void display_interactive_client_list(const char *title, const char *sql_query, I
 
         wrefresh(main_win);
 
-        werase(input_win); draw_custom_box(input_win);
+        werase(input_win); box(input_win, 0, 0);
         char instruction_buf[MAX_STR_LEN];
         const char* action_key_str = (action_type == INTERACTIVE_LIST_ACTION_EDIT) ? "E/Enter: Edit" : "D/Enter: Delete";
         snprintf(instruction_buf, sizeof(instruction_buf),
@@ -1694,7 +1619,7 @@ void display_interactive_client_list(const char *title, const char *sql_query, I
 
             case KEY_EDIT_CLIENT: case KEY_EDIT_CLIENT_ALT:
                 if (action_type != INTERACTIVE_LIST_ACTION_EDIT) { beep(); break; }
-            // Fall through
+            // Fall through for edit action if Enter/Select is pressed
             case KEY_ACTION_DELETE: case KEY_ACTION_DELETE_ALT:
                  if (action_type != INTERACTIVE_LIST_ACTION_DELETE && key != KEY_ACTION_SELECT && key != KEY_ACTION_ENTER) {
                     beep(); break;
@@ -1702,7 +1627,8 @@ void display_interactive_client_list(const char *title, const char *sql_query, I
                  if (action_type == INTERACTIVE_LIST_ACTION_DELETE && (key == KEY_EDIT_CLIENT || key == KEY_EDIT_CLIENT_ALT)) {
                      beep(); break;
                  }
-            // Fall through
+            // Fall through for delete action if Enter/Select is pressed
+
             case KEY_ACTION_SELECT: case KEY_ACTION_ENTER:
                 if (total_items > 0 && selected_item_index >=0 && selected_item_index < total_items) {
                     int client_id_action = items[selected_item_index].id;
@@ -1710,10 +1636,10 @@ void display_interactive_client_list(const char *title, const char *sql_query, I
                     strncpy(client_name_action, items[selected_item_index].business_name, MAX_STR_LEN -1);
                     client_name_action[MAX_STR_LEN-1] = '\0';
 
-                    werase(input_win); draw_custom_box(input_win); wrefresh(input_win);
+                    werase(input_win); box(input_win, 0, 0); wrefresh(input_win);
 
                     if (action_type == INTERACTIVE_LIST_ACTION_EDIT) {
-                         if (key == KEY_ACTION_DELETE || key == KEY_ACTION_DELETE_ALT) {beep(); break;}
+                         if (key == KEY_ACTION_DELETE || key == KEY_ACTION_DELETE_ALT) {beep(); break;} // Don't delete if in edit mode with D key
                         edit_customer_form_screen(client_id_action);
                         details_loaded_for_selected = false;
                         prev_selected_item_index = -1;
@@ -1724,13 +1650,13 @@ void display_interactive_client_list(const char *title, const char *sql_query, I
                             items[selected_item_index].business_name[MAX_STR_LEN - 1] = '\0';
                         }
                     } else if (action_type == INTERACTIVE_LIST_ACTION_DELETE) {
-                        if (key == KEY_EDIT_CLIENT || key == KEY_EDIT_CLIENT_ALT) {beep(); break;}
+                        if (key == KEY_EDIT_CLIENT || key == KEY_EDIT_CLIENT_ALT) {beep(); break;} // Don't edit if in delete mode with E key
                         char confirm_prompt[MAX_STR_LEN + 50];
                         snprintf(confirm_prompt, sizeof(confirm_prompt), "Delete '%s' (ID:%d)? (Y/N): ", client_name_action, client_id_action);
                         mvwprintw(input_win, INPUT_PROMPT_Y, INPUT_PROMPT_X, "%.*s", getmaxx(input_win) - 2 - INPUT_PROMPT_X, confirm_prompt);
                         wrefresh(input_win);
                         int confirm_key = wgetch(input_win);
-                        werase(input_win); draw_custom_box(input_win); wrefresh(input_win);
+                        werase(input_win); box(input_win,0,0); wrefresh(input_win);
 
                         if (toupper(confirm_key) == 'Y') {
                             show_loading_indicator(true);
@@ -1760,7 +1686,7 @@ void display_interactive_client_list(const char *title, const char *sql_query, I
 
             case KEY_ACTION_QUIT: case KEY_ACTION_QUIT_ALT: case KEY_ESC:
                 free(items);
-                werase(input_win); draw_custom_box(input_win); wrefresh(input_win);
+                werase(input_win); box(input_win, 0, 0); wrefresh(input_win);
                 return;
 
             case KEY_RESIZE:
@@ -1796,7 +1722,7 @@ void display_interactive_client_list(const char *title, const char *sql_query, I
     }
 
     free(items);
-    werase(input_win); draw_custom_box(input_win); wrefresh(input_win);
+    werase(input_win); box(input_win, 0, 0); wrefresh(input_win);
 }
 
 
@@ -1896,8 +1822,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     if (!db) {
-        if (status_win) show_error("Database handle is NULL after init. Critical error.");
-        else fprintf(stderr, "Database handle is NULL after init. Critical error.\n");
+        show_error("Database handle is NULL after init. Critical error.");
         napms(2000);
         cleanup_ncurses();
         fprintf(stderr, "Database handle is NULL after successful initialization. Critical error. Exiting.\n");
