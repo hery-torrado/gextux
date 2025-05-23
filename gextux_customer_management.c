@@ -1452,9 +1452,21 @@ void draw_client_details_in_pane(WINDOW *win, const Client *client, int pane_sta
 
             y++;
             notes_ptr += bytes_to_print_this_line;
+            // --- BEGIN MODIFIED SECTION for infinite loop fix ---
             if (*notes_ptr == '\n') {
-                notes_ptr++;
+                notes_ptr++; // Consume the newline
+            } else if (bytes_to_print_this_line == 0 && *notes_ptr != '\0') {
+                // This condition is met if:
+                // 1. No bytes were actually processed for printing on the current line
+                //    (e.g., the first character was too wide, or it was an encoding error
+                //     that the inner loop didn't convert to printable bytes).
+                // 2. We are not at the end of the notes string.
+                //
+                // To prevent an infinite loop, we MUST advance notes_ptr.
+                notes_ptr++; // Advance past the problematic byte/character.
+                mbtowc(NULL, NULL, 0); // Reset mbtowc's internal shift state, as we've skipped a byte.
             }
+            // --- END MODIFIED SECTION ---
         }
     }
     #undef PRINT_PANE_DETAIL
